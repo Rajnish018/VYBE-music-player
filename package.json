@@ -1,0 +1,11 @@
+{
+  "scripts": {
+    "db:start": "sudo systemctl start postgresql",
+    "backend": "cd backend && npm run dev",
+    "frontend": "cd frontend && npm run dev",
+    "dev": "concurrently \"npm run db:start\" \"npm run backend\" \"npm run frontend\""
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.5"
+  }
+}

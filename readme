@@ -1,0 +1,124 @@
+                 Uploaded MP3
+                      │
+                      ▼
+              Extract metadata
+                      │
+          ┌───────────┴───────────┐
+          ▼                       ▼
+   Normalize title/artist    SHA-256 audio hash
+          │                       │
+          └───────────┬───────────┘
+                      ▼
+              PostgreSQL check
+                      │
+            ┌─────────┴─────────┐
+            │                   │
+        Duplicate            New song
+            │                   │
+            ▼                   ▼
+         HTTP 409          Create Track
+                                │
+                                ▼
+                          Create MEGA folder
+                                │
+                       ┌────────┴────────┐
+                       ▼                 ▼
+                    audio.mp3         cover.jpg
+
+
+
+Track
+ ├── title
+ ├── artist
+ ├── album
+ ├── albumArtist
+ ├── movie
+ ├── duration
+ ├── releaseDate
+ ├── language
+ ├── explicit
+ ├── composer
+ ├── trackNumber
+ ├── discNumber
+ ├── thumbnailUrl
+ │
+ ├── Genres ──────► Genre
+ │
+ └── Tags ────────► Tag
+
+MusicFile
+ ├── megaNodeId
+ ├── fileName
+ ├── fileSize
+ ├── mimeType
+ └── audioHash
+
+ Admin selects MP3
+      ↓
+Frontend reads duration
+      ↓
+Upload button disabled
+      ↓
+POST /api/admin/tracks
+      ↓
+Backend extracts metadata
+      ↓
+clean title + artist
+      ↓
+normalizeTitle()
+normalizeArtist()
+      ↓
+SHA-256
+      ↓
+Check normalizedTitle + normalizedArtist
+AND existing MusicFile
+      ↓
+Check audioHash
+      ↓
+Duplicate?
+ ┌────┴────┐
+ YES       NO
+ ↓          ↓
+409       Track.create()
+ ↓          ↓
+delete    MEGA folder
+temp         ↓
+            audio
+              ↓
+            cover
+              ↓
+          MusicFile
+              ↓
+             201
+
+
+
+Request A ─────┐
+               ├── PostgreSQL UNIQUE
+Request B ─────┘
+                     ↓
+               one succeeds
+               one gets P2002
+                     ↓
+                    409
+
+
+                MP3
+                 │
+                 ▼
+        Read embedded metadata
+                 │
+          ┌──────┴──────┐
+          │             │
+      Has cover      No cover
+          │             │
+          ▼             ▼
+   Use embedded     Ask user to
+      cover         select cover
+          │             │
+          └──────┬──────┘
+                 ▼
+          Upload audio + cover
+                 │
+                 ▼
+              MEGA

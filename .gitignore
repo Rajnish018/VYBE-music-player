@@ -1,0 +1,142 @@
+# ==========================================
+# MUSIC PLAYER - ROOT .gitignore
+# ==========================================
+
+# ==========================================
+# Dependencies
+# ==========================================
+node_modules/
+**/node_modules/
+
+# ==========================================
+# Environment / Secrets
+# ==========================================
+.env
+.env.*
+!.env.example
+
+# ==========================================
+# Build output
+# ==========================================
+dist/
+**/dist/
+
+build/
+**/build/
+
+out/
+**/out/
+
+.vite/
+**/.vite/
+
+.cache/
+**/.cache/
+
+# ==========================================
+# Logs
+# ==========================================
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# ==========================================
+# Coverage / Test output
+# ==========================================
+coverage/
+**/coverage/
+
+.nyc_output/
+test-results/
+playwright-report/
+
+# ==========================================
+# Temporary files
+# ==========================================
+tmp/
+**/tmp/
+
+temp/
+**/temp/
+
+uploads/
+**/uploads/
+
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+
+# ==========================================
+# Database local files
+# ==========================================
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+
+# ==========================================
+# Prisma
+# ==========================================
+prisma/*.db
+prisma/*.db-journal
+backend/prisma/*.db
+backend/prisma/*.db-journal
+
+# ==========================================
+# Operating System
+# ==========================================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ==========================================
+# VS Code
+# ==========================================
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# ==========================================
+# Other IDEs
+# ==========================================
+.idea/
+*.iml
+
+# ==========================================
+# React Native / Expo
+# ==========================================
+.expo/
+**/.expo/
+.expo-shared/
+
+# Android
+**/android/.gradle/
+**/android/app/build/
+**/android/build/
+**/android/local.properties
+**/android/.cxx/
+
+# iOS
+**/ios/Pods/
+**/ios/build/
+**/ios/DerivedData/
+**/ios/*.xcworkspace/xcuserdata/
+
+# ==========================================
+# Metro / React Native
+# ==========================================
+.metro-health-check*
+*.hprof
+
+# ==========================================
+# TypeScript generated files
+# ==========================================
+*.tsbuildinfo
+
+# ==========================================
+# Generated files
+# ==========================================
+*.generated.*

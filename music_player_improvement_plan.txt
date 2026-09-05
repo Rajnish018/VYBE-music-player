@@ -1,0 +1,807 @@
+MUSIC PLAYER — IMPROVEMENT & IMPLEMENTATION PLAN
+=================================================
+
+Goal
+----
+Improve the Music Player so that playback is stable, API calls are efficient,
+player state is centralized, user settings survive reloads, and administrators
+can safely add, edit, replace, and delete songs.
+
+IMPORTANT SAFETY RULE
+---------------------
+Make changes incrementally. Do not modify unrelated working functionality
+while fixing one problem.
+
+Existing areas that must continue working:
+- MEGA audio storage
+- Audio upload
+- SHA-256 audioHash duplicate protection
+- Prisma/PostgreSQL database
+- Favorites
+- Playlists
+- Playback history
+- Genres and tags
+- Authentication
+- Search
+- Audio streaming
+
+=================================================
+1. FIX AUDIO PLAYBACK STOPPING DURING STREAMING
+=================================================
+
+Problem
+-------
+The browser uses HTTP Range Requests for audio playback.
+
+Example log:
+  Streaming bytes 5144576-11396917/11396918
+  HTTP 206 Partial Content
+
+HTTP 206 is correct. The problem is that the backend must correctly stream
+each requested range from MEGA to the browser.
+
+Required solution
+-----------------
+The GET /api/tracks/:id/play endpoint must correctly support:
+- Range: bytes=0-
+- Range: bytes=START-
+- Range: bytes=START-END
+
+For partial requests return:
+  206 Partial Content
+  Accept-Ranges: bytes
+  Content-Range: bytes START-END/TOTAL
+  Content-Length: END-START+1
+  Content-Type: correct audio MIME type
+
+For complete requests return:
+  200 OK
+  Accept-Ranges: bytes
+  Content-Length: TOTAL
+  Content-Type: correct audio MIME type
+
+The MEGA stream must not be closed before the requested bytes are delivered.
+
+Do not buffer the entire large audio file in memory unnecessarily.
+
+Also handle:
+- MEGA stream errors
+- aborted browser requests
+- invalid ranges
+- end-of-file ranges
+- HEAD requests if needed by the frontend/browser
+
+Frontend requirement
+--------------------
+Use one persistent <audio> element.
+
+Do not recreate the audio source because:
+- volume changed
+- favorite changed
+- library refreshed
+- auth state changed
+- search changed
+- another unrelated React state changed
+
+The playback URL should remain stable while the same track is playing.
+
+=================================================
+2. CENTRALIZED PLAYER STATE MANAGEMENT
+=================================================
+
+Problem
+-------
+Player state can become inconsistent when multiple components independently
+manage current track, volume, playing state, and queue.
+
+Solution
+--------
+Create one centralized Player Store / Player Provider.
+
+Recommended state:
+
+  currentTrack
+  isPlaying
+  volume
+  currentTime
+  duration
+  queue
+  currentIndex
+  shuffle
+  repeat
+
+One persistent audio element should be controlled by this store/provider.
+
+Architecture:
+
+  PlayerProvider / PlayerStore
+           |
+           +-- <audio>
+           |
+           +-- Play/Pause
+           +-- Next/Previous
+           +-- Seek
+           +-- Volume
+           +-- Queue
+           +-- Shuffle
+           +-- Repeat
+
+All UI components read/write player state instead of creating independent
+audio instances.
+
+=================================================
+3. PERSIST VOLUME ACROSS PAGE RELOADS
+=================================================
+
+Problem
+-------
+Example:
+  User sets volume = 30%
+  Reload page
+  Volume becomes 70%
+
+Solution
+--------
+Volume must be part of centralized player state and persisted locally.
+
+Flow:
+
+  User changes volume
+        |
+        +--> Player Store = 30%
+        |
+        +--> localStorage = 0.30
+
+On application startup:
+
+  localStorage
+       |
+       v
+  Player Store
+       |
+       v
+  audio.volume = 0.30
+
+Recommended key:
+  music-player-volume
+
+Validate the stored value:
+- must be a finite number
+- must be between 0 and 1
+- otherwise use the default volume
+
+Do not let unrelated API calls overwrite volume.
+
+=================================================
+4. ONE-TIME INITIAL API LOADING
+=================================================
+
+Problem
+-------
+The application currently makes repeated calls such as:
+
+  GET /api/auth/me
+  GET /api/tracks
+  GET /api/favorites
+
+These can happen multiple times because components fetch independently.
+
+Solution
+--------
+Create a single application initialization process.
+
+Example:
+
+  initializeApp()
+      |
+      +-- /api/auth/me
+      +-- /api/tracks
+      +-- /api/favorites
+      |
+      v
+  Centralized Store
+
+Use an initialized flag:
+
+  initialized = false
+
+After the initial load:
+
+  initialized = true
+
+Components should consume the centralized state instead of calling the same
+API independently.
+
+Important:
+Changing volume must NOT call:
+  /api/auth/me
+  /api/tracks
+  /api/favorites
+
+Changing playback position must NOT reload the library.
+
+=================================================
+5. UPDATE STATE ONLY WHEN SOMETHING CHANGES
+=================================================
+
+Principle
+---------
+Separate:
+- Initial data loading
+- State updates
+- Server synchronization
+
+Example favorite:
+
+  User clicks Favorite
+       |
+       v
+  Update centralized state immediately
+       |
+       v
+  POST /api/favorites
+       |
+       v
+  Server/database synchronized
+
+If the API fails:
+  Roll back the optimistic state and show an error.
+
+Do not refetch the complete favorites list after every favorite click unless
+there is a real synchronization reason.
+
+=================================================
+6. SEARCH — DEBOUNCE API REQUESTS
+=================================================
+
+Problem
+-------
+Typing can generate:
+
+  ?q=p
+  ?q=pr
+  ?q=pra
+  ?q=prav
+
+This creates unnecessary API requests.
+
+Solution
+--------
+Debounce search by approximately 300 ms.
+
+Flow:
+
+  User types
+      |
+      v
+  Wait 300 ms
+      |
+      +-- user typed again -> restart timer
+      |
+      +-- no new input -> API request
+
+Also cancel the previous request with AbortController when a new search
+starts.
+
+Prevent an older request from overwriting newer search results.
+
+=================================================
+7. API REQUEST DEDUPLICATION / CACHING
+=================================================
+
+Problem
+-------
+Several components may request the same resource simultaneously.
+
+Example:
+
+  Component A -> GET /api/tracks
+  Component B -> GET /api/tracks
+  Component C -> GET /api/tracks
+
+Solution
+--------
+Share one in-flight request.
+
+Desired behavior:
+
+              +--> Component A
+GET /tracks --+--> Component B
+              +--> Component C
+
+Only one network request should be made.
+
+Cache server state centrally.
+
+Invalidate/update the cache only when tracks actually change.
+
+=================================================
+8. PERSIST PLAYBACK POSITION
+=================================================
+
+Store playback position carefully.
+
+Do NOT write to storage every second.
+
+Bad:
+  1 sec -> save
+  2 sec -> save
+  3 sec -> save
+  4 sec -> save
+
+Better:
+  Save every 5–10 seconds
+  Save on pause
+  Save when changing track
+  Save when leaving/backgrounding the page when reliable
+
+Store:
+  trackId
+  position
+
+When the same track is opened again, restore its position when appropriate.
+
+=================================================
+9. ADMIN — ADD SONG
+=================================================
+
+Admin must be able to upload a new song.
+
+Upload flow:
+
+  Select audio
+      |
+      v
+  Extract metadata
+      |
+      +-- title
+      +-- artist
+      +-- album
+      +-- albumArtist
+      +-- movie
+      +-- releaseYear
+      +-- releaseDate
+      +-- language
+      +-- explicit
+      +-- composer
+      +-- lyricist
+      +-- producer
+      +-- remixer
+      +-- copyright
+      +-- publisher
+      +-- description
+      +-- trackNumber
+      +-- discNumber
+      +-- cover metadata
+      +-- genre
+      +-- tags
+      |
+      v
+  Calculate SHA-256 audioHash
+      |
+      v
+  Duplicate check
+      |
+      +-- normalizedTitle + normalizedArtist
+      +-- audioHash
+      |
+      v
+  Upload to MEGA
+      |
+      v
+  Save Track + MusicFile
+      |
+      v
+  Save genres/tags
+      |
+      v
+  Return created track
+
+If a database operation fails after MEGA upload:
+  Delete the newly uploaded MEGA file.
+
+=================================================
+10. ADMIN — EDIT SONG METADATA
+=================================================
+
+Admin should be able to edit metadata without unnecessarily re-uploading the
+audio file.
+
+Editable Track metadata:
+
+  title
+  artist
+  album
+  albumArtist
+  movie
+  releaseYear
+  releaseDate
+  language
+  explicit
+  composer
+  lyricist
+  producer
+  remixer
+  copyright
+  publisher
+  description
+  trackNumber
+  discNumber
+  genre
+  tags
+  artwork
+
+When title or artist changes:
+  Recalculate normalizedTitle / normalizedArtist
+  Check the unique constraint again.
+
+Never allow editing to create a duplicate:
+
+  normalizedTitle + normalizedArtist
+
+Technical audio metadata should normally be read-only unless the actual
+audio file is replaced.
+
+=================================================
+11. ADMIN — REPLACE SONG AUDIO
+=================================================
+
+Admin should be able to replace the actual audio file.
+
+Safe flow:
+
+  New audio selected
+       |
+       v
+  Extract metadata
+       |
+       v
+  Calculate new audioHash
+       |
+       v
+  Check hash against OTHER tracks
+       |
+       +-- duplicate -> reject
+       |
+       v
+  Upload new audio to a temporary/new MEGA location
+       |
+       v
+  Update MusicFile
+       |
+       v
+  Delete old MEGA audio only after database update succeeds
+
+Important:
+Never delete the old working audio before the new audio has successfully
+uploaded and the database has been updated.
+
+If the update fails:
+  Keep the old audio.
+  Delete the newly uploaded temporary MEGA file.
+
+=================================================
+12. ADMIN — DELETE SONG
+=================================================
+
+Admin should be able to delete a song safely.
+
+Recommended flow:
+
+  Admin clicks Delete
+       |
+       v
+  Confirmation dialog
+       |
+       v
+  Find Track + MusicFile(s)
+       |
+       v
+  Delete MEGA audio/artwork
+       |
+       v
+  Delete database Track
+
+Because relations use ON DELETE CASCADE, related:
+- MusicFile
+- TrackGenre
+- TrackTag
+- Favorite
+- PlaylistTrack
+- PlaybackHistory
+- TrackSource
+
+can be removed automatically where the Prisma schema specifies cascade.
+
+IMPORTANT:
+Decide whether deletion should remove the track from playlists/history
+permanently or preserve historical references. If permanent cascade is
+desired, keep the current cascade behavior. If history must survive deletion,
+use a soft-delete/archive design instead.
+
+For production safety, consider:
+  deletedAt DateTime?
+
+and an archive/soft-delete mechanism.
+
+=================================================
+13. DUPLICATE-SAFE DATABASE DESIGN
+=================================================
+
+Use two levels of duplicate protection.
+
+Level 1:
+  Track @@unique([normalizedTitle, normalizedArtist])
+
+Level 2:
+  MusicFile audioHash @unique
+
+Why both?
+
+Two files can have:
+  different filenames
+  different metadata
+  same audio content
+
+SHA-256 catches the same binary audio.
+
+The normalized title/artist constraint catches duplicate logical tracks.
+
+Application checks are useful for friendly error messages, but database
+constraints are required for race-condition protection.
+
+Example race:
+
+  Upload A checks -> no duplicate
+  Upload B checks -> no duplicate
+  Upload A inserts
+  Upload B inserts
+
+The database unique constraint must reject one of them.
+
+=================================================
+14. TRACK VS MUSICFILE METADATA
+=================================================
+
+Do not put every metadata field into Track.
+
+Track = logical song information.
+
+MusicFile = physical audio-file information.
+
+Track:
+  title
+  artist
+  album
+  albumArtist
+  movie
+  releaseYear
+  releaseDate
+  language
+  explicit
+  composer
+  lyricist
+  producer
+  remixer
+  copyright
+  publisher
+  description
+  trackNumber
+  discNumber
+  artwork information
+  duration
+
+MusicFile:
+  fileName
+  fileSize
+  mimeType
+  audioHash
+  codec
+  bitrate
+  sampleRate
+  bitsPerSample
+  channels
+  megaFileId
+  megaNodeId
+
+This separation allows one logical Track to have different physical audio
+files/encodings if needed later.
+
+=================================================
+15. GENRE AND TAG MANAGEMENT
+=================================================
+
+Use normalized taxonomy tables:
+
+  Genre
+  Tag
+  TrackGenre
+  TrackTag
+
+Genre and Tag names should have unique normalized names.
+
+Example:
+
+  "Romance"
+  "romance"
+  " ROMANCE "
+
+should resolve to the same normalized taxonomy value.
+
+TrackGenre:
+  @@id([trackId, genreId])
+
+TrackTag:
+  @@id([trackId, tagId])
+
+This prevents duplicate relationships.
+
+=================================================
+16. ARTWORK
+=================================================
+
+When embedded artwork exists:
+
+  Extract artwork
+      |
+      v
+  Store artwork / MEGA reference
+      |
+      v
+  Save:
+    coverMimeType
+    coverWidth
+    coverHeight
+    thumbnailUrl
+
+If no embedded artwork exists:
+  Do not treat it as an upload failure.
+
+Optional future improvement:
+  Allow admin to manually upload/select cover artwork.
+
+=================================================
+17. FRONTEND STATE RULES
+=================================================
+
+Components should NOT independently fetch the same global data.
+
+Avoid:
+
+  Header -> /auth/me
+  Sidebar -> /auth/me
+  Player -> /auth/me
+  Home -> /tracks
+  Library -> /tracks
+  Favorites -> /favorites
+
+Instead:
+
+  App initialization
+        |
+        v
+  Central store
+        |
+        +-- Header
+        +-- Sidebar
+        +-- Player
+        +-- Home
+        +-- Library
+        +-- Favorites
+
+=================================================
+18. ERROR HANDLING
+=================================================
+
+Use consistent API errors:
+
+  400 -> validation
+  401 -> unauthorized
+  403 -> forbidden
+  404 -> not found
+  409 -> duplicate/conflict
+  408 -> timeout
+  500 -> server error
+
+For duplicate upload:
+  HTTP 409
+  code = DUPLICATE_TRACK
+
+For network failure:
+  Show a useful message without destroying existing player state.
+
+=================================================
+19. RECOMMENDED IMPLEMENTATION ORDER
+=================================================
+
+Phase 1 — Playback stability
+  1. Fix GET /api/tracks/:id/play Range streaming.
+  2. Verify MEGA stream lifecycle.
+  3. Verify frontend keeps one audio source.
+  4. Test seek/pause/resume/long playback.
+
+Phase 2 — Player state
+  5. Create centralized Player Store/Provider.
+  6. Move volume/currentTrack/isPlaying/queue into it.
+  7. Persist volume.
+  8. Ensure unrelated state changes do not recreate audio.
+
+Phase 3 — API efficiency
+  9. Create one-time app initialization.
+  10. Centralize auth/tracks/favorites state.
+  11. Deduplicate in-flight requests.
+  12. Debounce and cancel search requests.
+
+Phase 4 — Playback persistence
+  13. Persist playback position.
+  14. Restore position safely.
+
+Phase 5 — Admin management
+  15. Add song.
+  16. Edit metadata.
+  17. Replace audio.
+  18. Edit artwork.
+  19. Delete song.
+  20. Add confirmation/rollback handling.
+
+Phase 6 — Testing
+  21. Upload new song.
+  22. Upload exact same file again.
+  23. Upload same song with different filename.
+  24. Edit title/artist to an existing track.
+  25. Replace audio with an existing hash.
+  26. Delete track.
+  27. Test favorites/playlists/history.
+  28. Test long audio playback and seeking.
+  29. Reload at 30% volume and confirm it remains 30%.
+  30. Confirm startup API calls happen once.
+
+=================================================
+20. FINAL TARGET ARCHITECTURE
+=================================================
+
+                    APP
+                     |
+              Central App Store
+             /        |        \
+          Auth     Library     Player
+           |          |          |
+          User    Tracks/Fav   One Audio
+                              Element
+                                 |
+                              MEGA API
+                                 |
+                              Backend
+                                 |
+                         PostgreSQL + MEGA
+
+Admin:
+  Add
+  Edit metadata
+  Replace audio
+  Edit artwork
+  Delete
+
+Database:
+  Track
+  MusicFile
+  Genre
+  Tag
+  TrackGenre
+  TrackTag
+  Favorite
+  Playlist
+  PlaylistTrack
+  PlaybackHistory
+  TrackSource
+
+Core principles:
+  - One source of truth for global state.
+  - One persistent audio element.
+  - Load global API data once.
+  - Synchronize only when state actually changes.
+  - Persist important player settings.
+  - Use database constraints for duplicate safety.
+  - Keep logical track metadata separate from physical file metadata.
+  - Use transactional/rollback behavior for MEGA + database operations.
+  - Make targeted changes so existing functionality is not broken.
