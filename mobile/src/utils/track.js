@@ -1,0 +1,2 @@
+export function normalizeTrack(t={}){return {id:t.id,title:t.title||'Untitled Track',artist:t.artist||'Unknown Artist',album:t.album||'Single',duration:Number(t.duration)||0,thumbnailUrl:t.thumbnailUrl||t.cover||'',audioUrl:t.audioUrl||'',sourceUrl:t.sourceUrl||'',youtubeId:t.youtubeId||t.youtubeVideoId||'',source:t.source||'',playable:t.playable!==false,releaseYear:t.releaseYear||t.year||null};}
+export function formatTime(v){const n=Math.max(0,Math.floor(Number(v)||0));return `${Math.floor(n/60)}:${String(n%60).padStart(2,'0')}`;}

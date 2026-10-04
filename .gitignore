@@ -140,3 +140,59 @@ desktop.ini
 # Generated files
 # ==========================================
 *.generated.*
+# ===== Local database backups =====
+*_backup.sql
+**/*_backup.sql
+*.dump
+*.sql.gz
+restore.list
+**/restore.list
+
+# ===== Local/test media =====
+*.mp3
+*.wav
+*.flac
+*.m4a
+*.webm
+*.mp4
+
+# ===== Backup source files =====
+*.backup.*
+*.bak.*
+*.orig
+
+# ===== AI agent files =====
+.agents/
+.claude/
+.cursor/
+.copilot/
+.windsurf/
+.cline/
+.roo/
+.gemini/
+.mcp/
+skills-lock.json
+**/skills-lock.json
+
+# ===== Neon local files =====
+.neon/
+neon.ts
+**/neon.ts
+
+# ===== Archives =====
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
+MEGA-Music-Mobile-Production/
+
+# ===== Local credentials/certificates =====
+credentials.json
+service-account.json
+*.pem
+*.key
+*.p12
+*.pfx
+backend/src/routes/adminTracks.ts.backup-*

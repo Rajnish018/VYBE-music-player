@@ -122,3 +122,52 @@ Request B ─────┘
                  │
                  ▼
               MEGA
+
+
+                                  AURA MUSIC PLAYER
+                           │
+             ┌─────────────┴─────────────┐
+             │                           │
+        MEGA TRACKS                YOUTUBE TRACKS
+             │                           │
+        Existing API             YouTube service
+             │                           │
+             └─────────────┬─────────────┘
+                           │
+                    Existing Player
+                           │
+                     useAudioPlayer
+
+
+
+
+                                  YouTube Android
+                    │
+                 Share
+                    │
+                    ▼
+              Aura Android
+                    │
+             ACTION_SEND
+                    │
+             YouTube URL
+                    │
+                    ▼
+          React/Vite Aura UI
+                    │
+                    ▼
+       POST /api/share/youtube
+                    │
+                    ▼
+          Express Backend
+                    │
+          extractVideoId()
+                    │
+          ┌─────────┴─────────┐
+          ▼                   ▼
+     youtubei.js            yt-dlp
+     metadata              audio URL
+          │                   │
+          └─────────┬─────────┘
+                    ▼
+             Aura Player

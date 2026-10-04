@@ -1,56 +1,115 @@
-# Welcome to your Expo app 👋
+# MEGA Music Mobile
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Production-oriented React Native / Expo mobile client for the existing MEGA Music backend.
 
-## Get started
+## What is included
 
-1. Install dependencies
+- Same backend API contracts as the existing web app.
+- Login / registration / session restore.
+- Home, Discover, Library, Favorites, Artists, Artist detail, Albums, Album detail, Settings.
+- YouTube search source using the existing `/api/tracks/search?source=youtube` flow.
+- YouTube audio playback through `/api/share/youtube/audio?id=VIDEO_ID`.
+- MEGA/library playback through `/api/tracks/:id/play?token=...`.
+- Persistent native audio player with background playback and lock-screen metadata.
+- Queue, next, previous, shuffle, repeat, seek and volume controls.
+- Native share modal with system Share sheet and Copy Link.
+- Admin upload screen using the existing `/api/admin/tracks` endpoint.
+- Production-safe API error handling and configurable API base URL.
 
-   ```bash
-   npm install
-   ```
+## API URL
 
-2. Start the app
+Create `.env` from `.env.example`.
 
-   ```bash
-   npx expo start
-   ```
+For Android emulator:
 
-In the output, you'll find options to open the app in a
+`EXPO_PUBLIC_API_BASE_URL=http://10.0.2.2:3000`
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+For a physical phone on the same LAN as the backend computer:
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+`EXPO_PUBLIC_API_BASE_URL=http://YOUR_COMPUTER_LAN_IP:3000`
 
-## Get a fresh project
+For production:
 
-When you're ready, run:
+`EXPO_PUBLIC_API_BASE_URL=https://YOUR_API_DOMAIN`
+
+Do not use `localhost` on a physical phone unless the API itself runs on the phone.
+
+## Install
+
+Requirements: Node 22.13+ for Expo SDK 57, Android Studio for Android builds, and Xcode 26.4+ for iOS builds. Expo SDK 57 targets React Native 0.86.
 
 ```bash
-npm run reset-project
+npm install
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+For Expo native modules such as background audio, use a development build or an EAS build rather than relying on Expo Go for the final production configuration.
 
-### Other setup steps
+## Run development
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+```bash
+npx expo start
+```
 
-## Learn more
+For an Android native development build:
 
-To learn more about developing your project with Expo, look at the following resources:
+```bash
+npx expo run:android
+```
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+Or:
 
-## Join the community
+```bash
+eas build --profile development --platform android
+```
 
-Join our community of developers creating universal apps.
+## Production builds
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+Android APK/AAB:
+
+```bash
+eas build --profile production --platform android
+```
+
+iOS:
+
+```bash
+eas build --profile production --platform ios
+```
+
+## Important backend requirement
+
+The mobile app intentionally does not create a second backend. It uses the existing endpoints from the web application:
+
+- `/api/auth/login`
+- `/api/auth/register`
+- `/api/auth/me`
+- `/api/auth/logout`
+- `/api/tracks/library`
+- `/api/tracks/search`
+- `/api/tracks/:id/play`
+- `/api/share/youtube/audio`
+- `/api/tracks/:id/save`
+- `/api/favorites`
+- `/api/artists`
+- `/api/artists/:id`
+- `/api/admin/tracks`
+
+Your backend must be reachable from the phone and should use HTTPS in production.
+
+## Background audio
+
+Expo Audio is configured with `enableBackgroundPlayback: true` and the player enables lock-screen metadata when a track starts. Expo documents this configuration for sustained Android background playback and iOS background audio.
+
+## Uploads
+
+The admin screen uses the system document picker. The selected URI is sent as multipart form data to the same admin track endpoint. The backend remains responsible for metadata extraction, deduplication, MEGA upload, and database persistence.
+
+## Share modal
+
+Every track row exposes a three-dot action. The bottom-sheet modal provides:
+
+1. Share — native Android/iOS share sheet.
+2. Copy link — copies a playable backend URL.
+3. Cancel.
+
+For YouTube tracks the copied/shared URL uses the existing YouTube audio endpoint. For normal library tracks it uses the existing track playback endpoint with the authenticated token.
