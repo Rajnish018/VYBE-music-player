@@ -312,9 +312,19 @@ export async function extractAudioMetadata(
     ),
 
     artist:
-      common.artist?.trim() ||
-      common.artists?.[0]?.trim() ||
-      fallback.artist,
+  common.artist?.trim() ||
+  (
+    Array.isArray(common.artists)
+      ? common.artists
+          .filter(Boolean)
+          .map((artist) =>
+            String(artist).trim()
+          )
+          .filter(Boolean)
+          .join(', ')
+      : ''
+  ) ||
+  fallback.artist,
 
     album:
       common.album?.trim() ||

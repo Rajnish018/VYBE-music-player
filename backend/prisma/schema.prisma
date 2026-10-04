@@ -12,6 +12,24 @@ enum Role {
   ADMIN
 }
 
+enum UploadOperationType {
+  CREATE
+  REPLACE_AUDIO
+  DELETE_TRACK
+  DELETE_AUDIO
+  DELETE_COVER
+}
+
+enum UploadStatus {
+  PENDING
+  UPLOADING
+  DB_COMMITTING
+  COMPLETED
+  ROLLING_BACK
+  ROLLED_BACK
+  FAILED
+}
+
 model User {
   id           String   @id @default(uuid())
   email        String   @unique
@@ -20,9 +38,10 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  favorites Favorite[]
-  history   PlaybackHistory[]
-  playlists Playlist[]
+  favorites   Favorite[]
+  history     PlaybackHistory[]
+  playlists   Playlist[]
+  savedTracks UserTrack[]
 }
 
 model Track {
@@ -69,6 +88,8 @@ model Track {
   favorites      Favorite[]
   playlistTracks PlaylistTrack[]
   history        PlaybackHistory[]
+  artists        TrackArtist[]
+  savedBy        UserTrack[]
 
   @@unique([normalizedTitle, normalizedArtist])
   @@index([normalizedTitle])
@@ -78,6 +99,20 @@ model Track {
   @@index([movie])
   @@index([releaseYear])
   @@index([language])
+}
+
+model UserTrack {
+  id        String   @id @default(uuid())
+  userId    String
+  trackId   String
+  createdAt DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  track Track @relation(fields: [trackId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, trackId])
+  @@index([userId])
+  @@index([trackId])
 }
 
 model MusicFile {
@@ -231,4 +266,63 @@ model PlaybackHistory {
   @@index([userId])
   @@index([trackId])
   @@index([lastPlayedAt])
+}
+
+model UploadOperation {
+  id     String              @id @default(uuid())
+  status UploadStatus        @default(PENDING)
+  type   UploadOperationType @default(CREATE)
+
+  megaFolder      String?
+  megaAudioNodeId String?
+  megaCoverNodeId String?
+
+  oldMegaAudioNodeId String?
+  oldMegaCoverNodeId String?
+
+  trackId String?
+  error   String?
+
+  leaseExpiresAt  DateTime?
+  lastHeartbeatAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([trackId])
+  @@index([type])
+  @@index([leaseExpiresAt])
+}
+
+model Artist {
+  id             String @id @default(uuid())
+  name           String
+  normalizedName String @unique
+
+  // Artist-specific information
+  description String?
+
+  // Artist-specific image — NOT taken from song cover
+  coverUrl       String?
+  coverMimeType  String?
+  coverUpdatedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tracks TrackArtist[]
+
+  @@index([name])
+}
+
+model TrackArtist {
+  trackId  String
+  artistId String
+
+  track  Track  @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  artist Artist @relation(fields: [artistId], references: [id], onDelete: Cascade)
+
+  @@id([trackId, artistId])
+  @@index([artistId])
 }

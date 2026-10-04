@@ -2,7 +2,11 @@ import { Router, Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
-import { Prisma } from '@prisma/client';
+import {
+  Prisma,
+  UploadOperationType,
+  UploadStatus,
+} from '@prisma/client';
 
 import { prisma } from '../config/db';
 import {
@@ -12,6 +16,17 @@ import {
 import { upload, adminTrackUpload } from '../middleware/upload';
 
 import { megaService } from '../services/megaService';
+import {
+  createUploadOperation,
+  updateUploadOperation,
+} from '../services/uploadOperationService';
+import {
+  cleanupDeletedAudioOperation,
+  cleanupDeletedCoverOperation,
+  cleanupDeletedTrackOperation,
+  rollbackMegaResources,
+  rollbackUploadOperation,
+} from '../services/rollbackService';
 
 import {
   normalizeTitle,
@@ -21,14 +36,38 @@ import {
 import {
   extractAudioMetadata,
 } from '../services/audioMetadataService';
+import {
+  invalidateAllFavoritesCaches,
+  invalidateTrackCache,
+} from '../services/redisService';
+
+import {
+  syncTrackArtists,
+} from '../services/artistService';
 
 const router = Router();
+
+function isTrackOperationInProgressError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message === 'TRACK_OPERATION_IN_PROGRESS'
+  );
+}
+
+function sendTrackOperationConflict(res: Response) {
+  return res.status(409).json({
+    error: 'TRACK_OPERATION_IN_PROGRESS',
+    message: 'Another operation is already in progress for this track.',
+  });
+}
 
 /*
 |--------------------------------------------------------------------------
 | Allowed audio formats
 |--------------------------------------------------------------------------
 */
+
+
 
 const allowedAudioExtensions = new Set([
   '.aac',
@@ -131,7 +170,7 @@ function inferTrackMetadata(fileName: string) {
   const hasArtistTitle =
     Boolean(
       artistPart &&
-        titleParts.length > 0,
+      titleParts.length > 0,
     );
 
   const title =
@@ -150,13 +189,13 @@ function inferTrackMetadata(fileName: string) {
     title:
       titleCase(
         title ||
-          'Untitled Track',
+        'Untitled Track',
       ),
 
     artist:
       titleCase(
         artist ||
-          'Unknown Artist',
+        'Unknown Artist',
       ),
 
     album:
@@ -375,36 +414,79 @@ async function findDuplicateTrack(
 }
 
 async function syncTrackTaxonomy(
+  db: Prisma.TransactionClient | typeof prisma,
   trackId: string,
-  genres: string[],
-  tags: string[],
+  genres: unknown,
+  tags: unknown,
 ) {
   const cleanGenres = parseList(genres);
   const cleanTags = parseList(tags, true);
 
-  await prisma.trackGenre.deleteMany({ where: { trackId } });
-  await prisma.trackTag.deleteMany({ where: { trackId } });
+  await db.trackGenre.deleteMany({
+    where: {
+      trackId,
+    },
+  });
+
+  await db.trackTag.deleteMany({
+    where: {
+      trackId,
+    },
+  });
 
   for (const genreName of cleanGenres) {
-    const normalizedName = normalizeTitle(genreName);
+    const normalizedName = normalizeTitle(
+      genreName,
+    );
+
     if (!normalizedName) continue;
-    const genre = await prisma.genre.upsert({
-      where: { normalizedName },
-      update: { name: genreName },
-      create: { name: genreName, normalizedName },
+
+    const genre = await db.genre.upsert({
+      where: {
+        normalizedName,
+      },
+      update: {
+        name: genreName,
+      },
+      create: {
+        name: genreName,
+        normalizedName,
+      },
     });
-    await prisma.trackGenre.create({ data: { trackId, genreId: genre.id } });
+
+    await db.trackGenre.create({
+      data: {
+        trackId,
+        genreId: genre.id,
+      },
+    });
   }
 
   for (const tagName of cleanTags) {
-    const normalizedName = tagName.toLowerCase().trim();
+    const normalizedName =
+      tagName.toLowerCase().trim();
+
     if (!normalizedName) continue;
-    const tag = await prisma.tag.upsert({
-      where: { normalizedName },
-      update: { name: tagName },
-      create: { name: tagName, normalizedName },
+
+    const tag = await db.tag.upsert({
+      where: {
+        normalizedName,
+      },
+      update: {
+        name: tagName,
+      },
+      create: {
+        name: tagName,
+        normalizedName,
+      },
     });
-    await prisma.trackTag.create({ data: { trackId, tagId: tag.id } });
+
+    await db.trackTag.create({
+      data: {
+        trackId,
+        tagId: tag.id,
+      },
+    });
   }
 }
 
@@ -453,13 +535,10 @@ async function deleteMegaCoverFiles(
   }
 }
 
-async function uploadToMegaAndSave(
+async function uploadAudioToMega(
   localPath: string,
   fileName: string,
-  fileSize: number,
-  mimeType: string,
   trackId: string,
-  audioHash: string,
 ) {
   await megaService.connect();
 
@@ -470,57 +549,68 @@ async function uploadToMegaAndSave(
     normalizedAudioFileName(fileName);
 
   /*
-   * Upload audio.
+   * Upload audio to MEGA only.
+   *
+   * IMPORTANT:
+   * This function does NOT create a MusicFile database record.
+   * Database work will happen later inside a Prisma transaction.
    */
   const uploadedNode =
     await megaService.uploadFile(
       localPath,
-      megaService.getNodeId(
-        trackFolder,
-      ),
+      megaService.getNodeId(trackFolder),
       storedFileName,
     );
 
+  return {
+    trackFolder,
+    trackFolderId:
+      megaService.getNodeId(trackFolder),
+    uploadedNode,
+    megaNodeId:
+      megaService.getNodeId(uploadedNode),
+    storedFileName,
+  };
+}
+
+
+/**
+ * Legacy helper kept temporarily for the replacement-audio route.
+ *
+ * Phase 4.1 changes only the new-track creation flow. The replacement
+ * route still uses this helper until its staging/versioning phase is
+ * implemented. Do not use this helper for new-track creation.
+ */
+async function uploadToMegaAndSave(
+  localPath: string,
+  fileName: string,
+  fileSize: number,
+  mimeType: string,
+  trackId: string,
+  audioHash: string,
+) {
+  const megaAudio = await uploadAudioToMega(
+    localPath,
+    fileName,
+    trackId,
+
+  );
+
   try {
-    /*
-     * Save MusicFile.
-     */
-    const musicFile =
-      await prisma.musicFile.create({
-        data: {
-          trackId,
-
-          megaNodeId:
-            megaService.getNodeId(
-              uploadedNode,
-            ),
-
-          fileName:
-            storedFileName,
-
-          mimeType,
-
-          fileSize,
-
-          audioHash,
-        },
-      });
-
-    return musicFile;
+    return await prisma.musicFile.create({
+      data: {
+        trackId,
+        megaNodeId: megaAudio.megaNodeId,
+        fileName: megaAudio.storedFileName,
+        mimeType,
+        fileSize,
+        audioHash,
+      },
+    });
   } catch (error) {
-    /*
-     * Database failed.
-     * Remove uploaded MEGA file.
-     */
     try {
-      await megaService.deleteFile(
-        megaService.getNodeId(
-          uploadedNode,
-        ),
-      );
-    } catch (
-      deleteError
-    ) {
+      await megaService.deleteFile(megaAudio.megaNodeId);
+    } catch (deleteError) {
       console.warn(
         'Uploaded file could not be removed after database failure:',
         deleteError,
@@ -591,7 +681,7 @@ router.get(
           },
         });
     } catch (
-      error: any
+    error: any
     ) {
       return res
         .status(503)
@@ -632,6 +722,10 @@ router.post(
     let uploadedAudioNodeId: string | null = null;
     let uploadedCoverNodeId: string | null = null;
     let customCover: Express.Multer.File | undefined;
+    let operationId: string | null = null;
+    let transactionCommitted = false;
+    let normalizedTitleForError: string | null = null;
+    let normalizedArtistForError: string | null = null;
 
     try {
       const uploadedFiles = req.files as {
@@ -806,6 +900,7 @@ router.post(
         });
       }
 
+
       // 3. Normalize using the existing deduplication functions.
       const normTitle = normalizeTitle(
         String(finalTitle),
@@ -814,6 +909,9 @@ router.post(
       const normArtist = normalizeArtist(
         String(finalArtist),
       );
+
+      normalizedTitleForError = normTitle;
+      normalizedArtistForError = normArtist;
 
       if (!normTitle || !normArtist) {
         if (tempFilePath && fs.existsSync(tempFilePath)) {
@@ -858,140 +956,67 @@ router.post(
           );
       }
 
+      // Create an operation record only after duplicate protection passes.
+      const uploadOperation = await createUploadOperation();
+      operationId = uploadOperation.id;
+
+      await updateUploadOperation(operationId, {
+        status: 'UPLOADING',
+      });
+
       /*
-       * 6. Atomically reserve the Track.
+       * 6. Stage all external MEGA resources before touching PostgreSQL.
        *
-       * The database @@unique([normalizedTitle, normalizedArtist])
-       * is the final protection against simultaneous uploads.
+       * PostgreSQL cannot participate in a MEGA transaction. Therefore:
+       *
+       *   validate → dedupe → stage MEGA → short Prisma transaction
+       *
+       * If the Prisma transaction fails, the outer catch compensates by
+       * deleting the newly uploaded MEGA nodes.
        */
-      let track;
-
-      try {
-        track = await prisma.track.create({
-          data: {
-            title: String(finalTitle).trim(),
-            normalizedTitle: normTitle,
-            artist: String(finalArtist).trim(),
-            normalizedArtist: normArtist,
-            album:
-              String(finalAlbum || '').trim() ||
-              null,
-            albumArtist,
-            movie,
-            releaseYear,
-            releaseDate,
-            language,
-            explicit,
-            composer,
-            copyright,
-            publisher,
-            description,
-            trackNumber,
-            discNumber,
-            duration: Math.round(
-              Number(finalDuration),
-            ),
-            thumbnailUrl: null,
-            coverMimeType: metadata.coverMimeType || null,
-            coverWidth: getMetadataNumber(richMetadata, 'coverWidth', 'width'),
-            coverHeight: getMetadataNumber(richMetadata, 'coverHeight', 'height'),
-          },
-        });
-      } catch (error: any) {
-        if (
-          error instanceof
-            Prisma.PrismaClientKnownRequestError &&
-          error.code === 'P2002'
-        ) {
-          const conflictingTrack =
-            await prisma.track.findFirst({
-              where: {
-                normalizedTitle: normTitle,
-                normalizedArtist: normArtist,
-              },
-              select: {
-                id: true,
-                title: true,
-                artist: true,
-                album: true,
-                thumbnailUrl: true,
-              },
-            });
-
-          if (conflictingTrack) {
-            if (
-              tempFilePath &&
-              fs.existsSync(tempFilePath)
-            ) {
-              fs.unlinkSync(tempFilePath);
-              tempFilePath = null;
-            }
-
-            return res
-              .status(409)
-              .json(
-                getDuplicateResponse(
-                  conflictingTrack,
-                ),
-              );
-          }
-        }
-
-        throw error;
-      }
-
-      createdTrackId = track.id;
+      const stagedTrackId = crypto.randomUUID();
 
       /*
-       * 7. ONLY after duplicate protection has passed,
-       *    create the MEGA folder and upload audio.
+       * Create the MEGA track folder and upload audio using the final
+       * Track UUID that will be persisted by Prisma.
        */
-      const musicFile =
-        await uploadToMegaAndSave(
+      const megaAudio =
+        await uploadAudioToMega(
           tempFilePath,
           file.originalname,
-          file.size,
-          file.mimetype,
-          track.id,
-          audioHash,
+          stagedTrackId,
         );
 
       uploadedAudioNodeId =
-        musicFile.megaNodeId;
+        megaAudio.megaNodeId;
 
-      // Save codec/container-specific metadata on MusicFile.
-      const technicalMetadata = {
-        codec: optionalString(getMetadataValue(richMetadata, 'codec', 'codecName', 'format')),
-        bitrate: getMetadataNumber(richMetadata, 'bitrate', 'bitRate'),
-        sampleRate: getMetadataNumber(richMetadata, 'sampleRate', 'sample_rate'),
-        bitsPerSample: getMetadataNumber(richMetadata, 'bitsPerSample', 'bitDepth', 'bitsPerSample'),
-        channels: getMetadataNumber(richMetadata, 'channels', 'channelCount'),
-      };
+      /*
+       * Save the staged MEGA identifiers on the operation as soon as the
+       * external upload succeeds. These values are useful for recovery if
+       * the process crashes before the DB transaction starts.
+       */
+      await updateUploadOperation(operationId, {
+        megaFolder: megaAudio.trackFolderId,
+        megaAudioNodeId: uploadedAudioNodeId,
+      });
 
-      const savedMusicFile =
-        await prisma.musicFile.update({
-          where: { id: musicFile.id },
-          data: technicalMetadata,
-        });
-
-      // Keep the response object in sync with the database row.
-      Object.assign(musicFile, savedMusicFile);
-
-      await syncTrackTaxonomy(track.id, genres, tags);
-
-      // 8. Find the MEGA track folder.
+      /*
+       * Find the MEGA track folder and stage artwork before the DB
+       * transaction. Old resources cannot be affected because this is a
+       * brand-new track folder.
+       */
       const trackFolder =
-        await getMegaTrackFolder(
-          track.id,
-        );
+        megaAudio.trackFolder;
 
       const trackFolderId =
-        megaService.getNodeId(
-          trackFolder,
-        );
+        megaAudio.trackFolderId;
 
-      // 9. Upload artwork.
-      // Priority: manually selected cover > embedded cover.
+      /*
+       * 7. Stage artwork.
+       *
+       * Priority:
+       *   manually selected cover > embedded cover
+       */
       let thumbnailUrl: string | null = null;
 
       const coverBuffer = customCover
@@ -1016,10 +1041,17 @@ router.post(
         selectedPictureType: metadata.selectedPictureType,
       });
 
-      if (coverBuffer && coverMimeType && coverExtension) {
-        const coverFileName = `cover${coverExtension}`;
+      if (
+        coverBuffer &&
+        coverMimeType &&
+        coverExtension
+      ) {
+        const coverFileName =
+          `cover${coverExtension}`;
 
-        console.log(`[ARTWORK] Uploading ${coverFileName}...`);
+        console.log(
+          `[ARTWORK] Uploading ${coverFileName}...`,
+        );
 
         const uploadedCover =
           await megaService.uploadCoverFile(
@@ -1030,51 +1062,335 @@ router.post(
           );
 
         uploadedCoverNodeId =
-          megaService.getNodeId(uploadedCover);
+          megaService.getNodeId(
+            uploadedCover,
+          );
+
+        await updateUploadOperation(
+          operationId,
+          {
+            megaCoverNodeId:
+              uploadedCoverNodeId,
+          },
+        );
 
         console.log(
           `[ARTWORK] Cover uploaded successfully: ${uploadedCoverNodeId}`,
         );
 
-        thumbnailUrl = `/api/tracks/${track.id}/cover`;
-
-        await prisma.track.update({
-          where: { id: track.id },
-          data: {
-            thumbnailUrl,
-          },
-        });
-
-        console.log(
-          `[ARTWORK] Database thumbnailUrl: ${thumbnailUrl}`,
-        );
+        thumbnailUrl =
+          `/api/tracks/${stagedTrackId}/cover`;
       } else {
-        console.log('[ARTWORK] No artwork found.');
+        console.log(
+          '[ARTWORK] No artwork found.',
+        );
       }
+      
 
-      // Delete temporary custom cover upload.
-      if (customCover?.path && fs.existsSync(customCover.path)) {
+      /*
+       * 8. Move the operation into DB_COMMITTING before entering the
+       * short ACID transaction. This state is persisted outside the
+       * transaction because the UploadOperation row itself must survive
+       * a failed transaction for rollback/recovery.
+       */
+      await updateUploadOperation(operationId, {
+        status: 'DB_COMMITTING',
+      });
+
+      /*
+       * Short ACID database transaction.
+       *
+       * No MEGA network calls happen inside this transaction.
+       * If any DB operation fails, every DB change below is rolled back.
+       */
+      const transactionResult =
+        await prisma.$transaction(
+          async (tx) => {
+            let transactionTrack;
+
+            try {
+              transactionTrack =
+                await tx.track.create({
+                  data: {
+                    id: stagedTrackId,
+
+                    title:
+                      String(finalTitle).trim(),
+
+                    normalizedTitle:
+                      normTitle,
+
+                    artist:
+                      String(finalArtist).trim(),
+
+                    normalizedArtist:
+                      normArtist,
+
+                    album:
+                      String(
+                        finalAlbum || '',
+                      ).trim() || null,
+
+                    albumArtist,
+
+                    movie,
+
+                    releaseYear,
+
+                    releaseDate,
+
+                    language,
+
+                    explicit,
+
+                    composer,
+
+                    copyright,
+
+                    publisher,
+
+                    description,
+
+                    trackNumber,
+
+                    discNumber,
+
+                    duration:
+                      Math.round(
+                        Number(
+                          finalDuration,
+                        ),
+                      ),
+
+                    thumbnailUrl,
+
+                    coverMimeType:
+                      coverMimeType || null,
+
+                    coverWidth:
+                      getMetadataNumber(
+                        richMetadata,
+                        'coverWidth',
+                        'width',
+                      ),
+
+                    coverHeight:
+                      getMetadataNumber(
+                        richMetadata,
+                        'coverHeight',
+                        'height',
+                      ),
+                  },
+                });
+            } catch (error: any) {
+              if (
+                error instanceof
+                Prisma.PrismaClientKnownRequestError &&
+                error.code === 'P2002'
+              ) {
+                /*
+                 * Re-throw. The outer catch handles the duplicate response
+                 * and compensating MEGA cleanup.
+                 */
+                throw error;
+              }
+
+              throw error;
+            }
+
+            createdTrackId =
+              transactionTrack.id;
+
+            await syncTrackArtists(
+              tx,
+              transactionTrack.id,
+              String(finalArtist).trim(),
+            );
+
+            const technicalMetadata = {
+              codec:
+                optionalString(
+                  getMetadataValue(
+                    richMetadata,
+                    'codec',
+                    'codecName',
+                    'format',
+                  ),
+                ),
+
+              bitrate:
+                getMetadataNumber(
+                  richMetadata,
+                  'bitrate',
+                  'bitRate',
+                ),
+
+              sampleRate:
+                getMetadataNumber(
+                  richMetadata,
+                  'sampleRate',
+                  'sample_rate',
+                ),
+
+              bitsPerSample:
+                getMetadataNumber(
+                  richMetadata,
+                  'bitsPerSample',
+                  'bitDepth',
+                  'bitsPerSample',
+                ),
+
+              channels:
+                getMetadataNumber(
+                  richMetadata,
+                  'channels',
+                  'channelCount',
+                ),
+            };
+
+            const transactionMusicFile =
+              await tx.musicFile.create({
+                data: {
+                  trackId:
+                    transactionTrack.id,
+
+                  megaNodeId:
+                    megaAudio.megaNodeId,
+
+                  fileName:
+                    megaAudio.storedFileName,
+
+                  mimeType:
+                    file.mimetype,
+
+                  fileSize:
+                    file.size,
+
+                  audioHash,
+
+                  ...technicalMetadata,
+                },
+              });
+
+            await syncTrackTaxonomy(
+              tx,
+              transactionTrack.id,
+              genres,
+              tags,
+            );
+
+            /*
+             * The operation is completed in the SAME transaction as the
+             * Track/MusicFile/taxonomy records. Therefore COMPLETED can
+             * never be committed if the DB transaction itself fails.
+             */
+            if (!operationId) {
+              throw new Error(
+                'Upload operation ID is missing before DB commit.',
+              );
+            }
+
+            await tx.uploadOperation.update({
+              where: {
+                id: operationId,
+              },
+
+              data: {
+                status: 'COMPLETED',
+
+                megaFolder:
+                  megaAudio.trackFolderId,
+
+                megaAudioNodeId:
+                  uploadedAudioNodeId,
+
+                megaCoverNodeId:
+                  uploadedCoverNodeId,
+
+                trackId:
+                  transactionTrack.id,
+
+                leaseExpiresAt:
+                  null,
+
+                lastHeartbeatAt:
+                  null,
+              },
+            });
+
+            return {
+              track:
+                transactionTrack,
+
+              musicFile:
+                transactionMusicFile,
+            };
+          },
+        );
+
+      transactionCommitted = true;
+
+      const track =
+        transactionResult.track;
+
+      const musicFile =
+        transactionResult.musicFile;
+
+      /*
+       * At this point the DB transaction has committed successfully.
+       * Keep the response object in sync with the committed row.
+       */
+      createdTrackId =
+        track.id;
+
+      /*
+       * Delete temporary custom cover upload.
+       */
+      if (
+        customCover?.path &&
+        fs.existsSync(
+          customCover.path,
+        )
+      ) {
         try {
-          fs.unlinkSync(customCover.path);
-        } catch {}
+          fs.unlinkSync(
+            customCover.path,
+          );
+        } catch { }
       }
 
-      // 10. Delete temporary local upload.
+      /*
+       * Delete temporary local audio upload.
+       */
       if (
         tempFilePath &&
-        fs.existsSync(tempFilePath)
+        fs.existsSync(
+          tempFilePath,
+        )
       ) {
-        fs.unlinkSync(tempFilePath);
-        tempFilePath = null;
+        fs.unlinkSync(
+          tempFilePath,
+        );
+
+        tempFilePath =
+          null;
       }
 
-      // 11. Return final database object.
+      /*
+       * The transaction result is already the committed Track. Reusing it
+       * avoids a second database round-trip after commit.
+       */
       const finalTrack =
-        await prisma.track.findUnique({
-          where: {
-            id: track.id,
-          },
-        });
+        track;
+
+      try {
+        await invalidateTrackCache();
+      } catch (cacheError) {
+        console.warn(
+          '[REDIS] Cache invalidation failed after successful upload:',
+          cacheError,
+        );
+      }
 
       return res
         .status(201)
@@ -1082,40 +1398,133 @@ router.post(
           message: thumbnailUrl
             ? 'Track, audio and cover uploaded successfully.'
             : 'Track and audio uploaded successfully. No embedded cover art was found.',
-          track: finalTrack,
+
+          track:
+            finalTrack,
+
           musicFile,
+
           artwork: {
-            uploaded: Boolean(
+            uploaded:
+              Boolean(
+                thumbnailUrl,
+              ),
+
+            url:
               thumbnailUrl,
-            ),
-            url: thumbnailUrl,
           },
         });
     } catch (error: any) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : String(error);
+
       console.error(
         'Track creation/upload error:',
         error,
       );
 
       /*
-       * Handle any unique constraint that reaches the outer catch.
+       * IMPORTANT:
+       *
+       * A committed transaction must never trigger MEGA rollback.
+       * Once PostgreSQL commits, Track/MusicFile and the UploadOperation
+       * are the durable state and the uploaded MEGA resources belong to
+       * that committed track.
+       */
+      if (operationId && !transactionCommitted) {
+        try {
+          const rollbackResult =
+            await rollbackUploadOperation(
+              operationId,
+              errorMessage,
+              {
+                megaAudioNodeId:
+                  uploadedAudioNodeId,
+                megaCoverNodeId:
+                  uploadedCoverNodeId,
+                trackId:
+                  createdTrackId,
+              },
+            );
+
+          if (!rollbackResult.success) {
+            console.error(
+              '[ROLLBACK] Cleanup completed with errors:',
+              rollbackResult.errors,
+            );
+          }
+        } catch (rollbackError) {
+          /*
+           * The operation row itself may be unavailable if the failure
+           * occurred while persisting its MEGA node IDs. Fall back to the
+           * in-memory IDs so the external resources are still compensated.
+           */
+          console.error(
+            '[ROLLBACK] Operation-based rollback failed. Falling back to in-memory MEGA IDs:',
+            rollbackError,
+          );
+
+          const fallbackRollback =
+            await rollbackMegaResources({
+              operationId,
+              megaFolderNodeId: null,
+              megaAudioNodeId: uploadedAudioNodeId,
+              megaCoverNodeId: uploadedCoverNodeId,
+              trackId: createdTrackId,
+            });
+
+          if (!fallbackRollback.success) {
+            console.error(
+              '[ROLLBACK] Fallback cleanup also failed:',
+              fallbackRollback.errors,
+            );
+          }
+
+          try {
+            await updateUploadOperation(
+              operationId,
+              {
+                status: fallbackRollback.success
+                  ? 'ROLLED_BACK'
+                  : 'FAILED',
+                error: [
+                  errorMessage,
+                  ...fallbackRollback.errors,
+                ]
+                  .filter(Boolean)
+                  .join('\n'),
+              },
+            );
+          } catch (operationError) {
+            console.error(
+              '[UPLOAD OPERATION] Could not persist fallback rollback state:',
+              operationError,
+            );
+          }
+        }
+      }
+
+      /*
+       * Handle a race where the database unique constraint rejects the
+       * staged Track even though the application-level duplicate check
+       * already passed. The MEGA cleanup above happens BEFORE this response.
        */
       if (
         error instanceof
-          Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
+        Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002' &&
+        normalizedTitleForError &&
+        normalizedArtistForError
       ) {
         const duplicateTrack =
           await prisma.track.findFirst({
             where: {
               normalizedTitle:
-                normalizeTitle(
-                  String(req.body.title || ''),
-                ),
+                normalizedTitleForError,
               normalizedArtist:
-                normalizeArtist(
-                  String(req.body.artist || ''),
-                ),
+                normalizedArtistForError,
               musicFiles: {
                 some: {},
               },
@@ -1134,86 +1543,67 @@ router.post(
             tempFilePath &&
             fs.existsSync(tempFilePath)
           ) {
-            fs.unlinkSync(tempFilePath);
-            tempFilePath = null;
+            try {
+              fs.unlinkSync(tempFilePath);
+            } catch { }
           }
+
+          const duplicateResponse =
+            getDuplicateResponse(
+              duplicateTrack,
+            );
 
           return res
             .status(409)
-            .json(
-              getDuplicateResponse(
-                duplicateTrack,
-              ),
-            );
+            .json(duplicateResponse);
         }
       }
 
-      // Remove uploaded cover from MEGA.
-      if (uploadedCoverNodeId) {
+      /*
+       * Remove temporary custom cover upload.
+       */
+      const customCoverPath =
+        customCover?.path ?? null;
+
+      if (
+        customCoverPath &&
+        fs.existsSync(customCoverPath)
+      ) {
         try {
-          await megaService.deleteFile(
-            uploadedCoverNodeId,
-          );
-        } catch (deleteError) {
-          console.warn(
-            'Could not remove uploaded cover after failure:',
-            deleteError,
-          );
-        }
+          fs.unlinkSync(customCoverPath);
+        } catch { }
       }
 
-      // Remove uploaded audio from MEGA.
-      if (uploadedAudioNodeId) {
-        try {
-          await megaService.deleteFile(
-            uploadedAudioNodeId,
-          );
-        } catch (deleteError) {
-          console.warn(
-            'Could not remove uploaded audio after failure:',
-            deleteError,
-          );
-        }
-      }
-
-      // Remove temporary custom cover upload.
-      if (customCover?.path && fs.existsSync(customCover.path)) {
-        try {
-          fs.unlinkSync(customCover.path);
-        } catch {}
-      }
-
-      // Remove temporary local upload.
+      /*
+       * Remove temporary local audio upload.
+       */
       if (
         tempFilePath &&
         fs.existsSync(tempFilePath)
       ) {
         try {
           fs.unlinkSync(tempFilePath);
-        } catch {}
+        } catch { }
       }
 
-      // MusicFile is removed by Track's onDelete: Cascade.
-      if (createdTrackId) {
-        try {
-          await prisma.track.delete({
-            where: {
-              id: createdTrackId,
-            },
+      /*
+       * If the transaction already committed, do not report a rollback.
+       * This branch is defensive for future post-commit code additions.
+       */
+      if (transactionCommitted) {
+        return res
+          .status(500)
+          .json({
+            error: errorMessage ||
+              'Track was committed, but the request could not be finalized.',
           });
-        } catch (deleteError) {
-          console.warn(
-            'Could not remove track after failed upload:',
-            deleteError,
-          );
-        }
       }
 
       return res
         .status(500)
         .json({
           error:
-            error?.message ||
+            errorMessage ||
             'Internal server error uploading track.',
         });
     }
@@ -1224,7 +1614,7 @@ router.post(
  * |--------------------------------------------------------------------------
  * | POST /api/admin/tracks/:id/audio
  * |
- * | Replace audio + optionally replace embedded cover
+ * | Safe replacement of audio + optionally embedded cover
  * |--------------------------------------------------------------------------
  */
 router.post(
@@ -1236,37 +1626,38 @@ router.post(
     req: Request,
     res: Response,
   ) => {
-    let tempFilePath:
-      | string
-      | null = null;
+    let tempFilePath: string | null = null;
 
-    let uploadedAudioNodeId:
-      | string
-      | null = null;
+    let operationId: string | null = null;
 
-    let uploadedCoverNodeId:
-      | string
-      | null = null;
+    let uploadedAudioNodeId: string | null = null;
+
+    let uploadedCoverNodeId: string | null = null;
+
+    let transactionCommitted = false;
+
+    let audioHash: string | null = null;
 
     try {
-      const { id } =
-        req.params;
+      const { id } = req.params;
 
-      const file =
-        req.file;
+      const file = req.file;
 
       if (!file) {
         return res
           .status(400)
           .json({
-            error:
-              'Audio file is required',
+            error: 'Audio file is required',
           });
       }
 
-      tempFilePath =
-        file.path;
+      tempFilePath = file.path;
 
+      /*
+       * ------------------------------------------------------------------
+       * 1. Load existing track
+       * ------------------------------------------------------------------
+       */
       const track =
         await prisma.track.findUnique({
           where: {
@@ -1275,23 +1666,28 @@ router.post(
         });
 
       if (!track) {
-        fs.unlinkSync(
-          tempFilePath,
-        );
+        if (
+          tempFilePath &&
+          fs.existsSync(tempFilePath)
+        ) {
+          try {
+            fs.unlinkSync(tempFilePath);
+          } catch { }
+        }
 
-        tempFilePath =
-          null;
+        tempFilePath = null;
 
         return res
           .status(404)
           .json({
-            error:
-              'Track not found',
+            error: 'Track not found',
           });
       }
 
       /*
-       * Extract metadata + artwork.
+       * ------------------------------------------------------------------
+       * 2. Extract metadata + artwork
+       * ------------------------------------------------------------------
        */
       const metadata =
         await extractAudioMetadata(
@@ -1299,119 +1695,214 @@ router.post(
           file.originalname,
         );
 
-      const richMetadata: any = metadata as any;
+      const richMetadata: any =
+        metadata as any;
 
       const albumArtist =
-        optionalString(req.body.albumArtist) ||
-        optionalString(getMetadataValue(richMetadata, 'albumArtist', 'album_artist'));
+        optionalString(
+          req.body.albumArtist,
+        ) ||
+        optionalString(
+          getMetadataValue(
+            richMetadata,
+            'albumArtist',
+            'album_artist',
+          ),
+        );
 
       const movie =
-        optionalString(req.body.movie) ||
-        optionalString(getMetadataValue(richMetadata, 'movie', 'film', 'show'));
+        optionalString(
+          req.body.movie,
+        ) ||
+        optionalString(
+          getMetadataValue(
+            richMetadata,
+            'movie',
+            'film',
+            'show',
+          ),
+        );
 
       const releaseYear =
         req.body.releaseYear !== undefined
-          ? optionalNumber(req.body.releaseYear)
-          : getMetadataNumber(richMetadata, 'releaseYear', 'year');
+          ? optionalNumber(
+            req.body.releaseYear,
+          )
+          : getMetadataNumber(
+            richMetadata,
+            'releaseYear',
+            'year',
+          );
 
       const releaseDate =
         req.body.releaseDate !== undefined
-          ? parseDate(req.body.releaseDate)
-          : parseDate(getMetadataValue(richMetadata, 'releaseDate', 'date'));
+          ? parseDate(
+            req.body.releaseDate,
+          )
+          : parseDate(
+            getMetadataValue(
+              richMetadata,
+              'releaseDate',
+              'date',
+            ),
+          );
 
       const language =
-        optionalString(req.body.language) ||
-        optionalString(getMetadataValue(richMetadata, 'language', 'lang'));
+        optionalString(
+          req.body.language,
+        ) ||
+        optionalString(
+          getMetadataValue(
+            richMetadata,
+            'language',
+            'lang',
+          ),
+        );
 
       const explicit =
         req.body.explicit !== undefined
-          ? optionalBoolean(req.body.explicit)
-          : getMetadataBoolean(richMetadata, 'explicit', 'ratingExplicit', 'contentRating');
+          ? optionalBoolean(
+            req.body.explicit,
+          )
+          : getMetadataBoolean(
+            richMetadata,
+            'explicit',
+            'ratingExplicit',
+            'contentRating',
+          );
 
       const composer =
-        optionalString(req.body.composer) ||
-        optionalString(getMetadataValue(richMetadata, 'composer'));
+        optionalString(
+          req.body.composer,
+        ) ||
+        optionalString(
+          getMetadataValue(
+            richMetadata,
+            'composer',
+          ),
+        );
 
       const copyright =
-        optionalString(req.body.copyright) ||
-        optionalString(getMetadataValue(richMetadata, 'copyright'));
+        optionalString(
+          req.body.copyright,
+        ) ||
+        optionalString(
+          getMetadataValue(
+            richMetadata,
+            'copyright',
+          ),
+        );
 
       const publisher =
-        optionalString(req.body.publisher) ||
-        optionalString(getMetadataValue(richMetadata, 'publisher', 'label'));
+        optionalString(
+          req.body.publisher,
+        ) ||
+        optionalString(
+          getMetadataValue(
+            richMetadata,
+            'publisher',
+            'label',
+          ),
+        );
 
       const description =
-        optionalString(req.body.description) ||
-        optionalString(getMetadataValue(richMetadata, 'description', 'comment'));
+        optionalString(
+          req.body.description,
+        ) ||
+        optionalString(
+          getMetadataValue(
+            richMetadata,
+            'description',
+            'comment',
+          ),
+        );
 
       const trackNumber =
         req.body.trackNumber !== undefined
-          ? optionalNumber(req.body.trackNumber)
-          : getMetadataNumber(richMetadata, 'trackNumber', 'track');
+          ? optionalNumber(
+            req.body.trackNumber,
+          )
+          : getMetadataNumber(
+            richMetadata,
+            'trackNumber',
+            'track',
+          );
 
       const discNumber =
         req.body.discNumber !== undefined
-          ? optionalNumber(req.body.discNumber)
-          : getMetadataNumber(richMetadata, 'discNumber', 'disc');
+          ? optionalNumber(
+            req.body.discNumber,
+          )
+          : getMetadataNumber(
+            richMetadata,
+            'discNumber',
+            'disc',
+          );
 
       const genres = parseList(
         req.body.genres ??
-          req.body.genre ??
-          getMetadataValue(richMetadata, 'genres', 'genre'),
+        req.body.genre ??
+        getMetadataValue(
+          richMetadata,
+          'genres',
+          'genre',
+        ),
       );
 
       const tags = parseList(
         req.body.tags ??
-          req.body.tag ??
-          getMetadataValue(richMetadata, 'tags', 'tag'),
+        req.body.tag ??
+        getMetadataValue(
+          richMetadata,
+          'tags',
+          'tag',
+        ),
       );
 
       console.log(
-        '[AUDIO METADATA]',
+        '[AUDIO REPLACEMENT METADATA]',
         {
-          title:
-            metadata.title,
-
-          artist:
-            metadata.artist,
-
-          album:
-            metadata.album,
-
-          duration:
-            metadata.duration,
-
-          hasCover:
-            Boolean(
-              metadata.coverBuffer,
-            ),
-
+          title: metadata.title,
+          artist: metadata.artist,
+          album: metadata.album,
+          duration: metadata.duration,
+          hasCover: Boolean(
+            metadata.coverBuffer,
+          ),
           coverSize:
-            metadata.coverBuffer
-              ?.length || 0,
-
+            metadata.coverBuffer?.length ||
+            0,
           coverMimeType:
             metadata.coverMimeType,
-
           coverExtension:
             metadata.coverExtension,
-
           pictureCount:
             metadata.pictureCount,
-
           selectedPictureType:
             metadata.selectedPictureType,
+          genres,
+          tags,
         },
       );
 
       /*
-       * Calculate the new file hash BEFORE deleting the existing audio.
-       * This prevents a replacement upload from destroying the current
-       * file when the same audio already exists on another track.
+       * ------------------------------------------------------------------
+       * 3. Calculate the new audio hash BEFORE touching old resources
+       * ------------------------------------------------------------------
        */
-      const audioHash =
-        await computeFileHash(tempFilePath);
+      audioHash =
+        await computeFileHash(
+          tempFilePath,
+        );
 
+      /*
+       * ------------------------------------------------------------------
+       * 4. Application-level duplicate protection
+       *
+       * Exclude current track because replacing the track with the same
+       * binary audio is not a cross-track duplicate.
+       * ------------------------------------------------------------------
+       */
       const duplicateFile =
         await prisma.musicFile.findFirst({
           where: {
@@ -1439,9 +1930,14 @@ router.post(
           tempFilePath &&
           fs.existsSync(tempFilePath)
         ) {
-          fs.unlinkSync(tempFilePath);
-          tempFilePath = null;
+          try {
+            fs.unlinkSync(
+              tempFilePath,
+            );
+          } catch { }
         }
+
+        tempFilePath = null;
 
         return res
           .status(409)
@@ -1453,97 +1949,26 @@ router.post(
       }
 
       /*
-       * Find existing audio.
+       * ------------------------------------------------------------------
+       * 5. Load current MusicFile
+       * ------------------------------------------------------------------
        */
       const existingFile =
         await prisma.musicFile.findFirst({
           where: {
-            trackId:
-              id,
+            trackId: track.id,
           },
         });
 
       /*
-       * Delete old audio only after duplicate protection passes.
+       * ------------------------------------------------------------------
+       * 6. Locate current MEGA track folder
+       *
+       * Nothing is deleted yet.
+       * ------------------------------------------------------------------
        */
-      if (existingFile) {
-        try {
-          await megaService.deleteFile(
-            existingFile.megaNodeId,
-          );
-        } catch (
-          error
-        ) {
-          console.warn(
-            'Could not delete old file from MEGA:',
-            error,
-          );
-        }
+      await megaService.connect();
 
-        await prisma.musicFile.delete({
-          where: {
-            id:
-              existingFile.id,
-          },
-        });
-      }
-
-      /*
-       * Upload replacement audio.
-       */
-      const musicFile =
-        await uploadToMegaAndSave(
-          tempFilePath,
-          file.originalname,
-          file.size,
-          file.mimetype,
-          track.id,
-          audioHash,
-        );
-
-      uploadedAudioNodeId =
-        musicFile.megaNodeId;
-
-      const updatedMusicFile =
-        await prisma.musicFile.update({
-          where: { id: musicFile.id },
-          data: {
-            codec: optionalString(
-              getMetadataValue(
-                richMetadata,
-                'codec',
-                'codecName',
-                'format',
-              ),
-            ),
-            bitrate: getMetadataNumber(
-              richMetadata,
-              'bitrate',
-              'bitRate',
-            ),
-            sampleRate: getMetadataNumber(
-              richMetadata,
-              'sampleRate',
-              'sample_rate',
-            ),
-            bitsPerSample: getMetadataNumber(
-              richMetadata,
-              'bitsPerSample',
-              'bitDepth',
-            ),
-            channels: getMetadataNumber(
-              richMetadata,
-              'channels',
-              'channelCount',
-            ),
-          },
-        });
-
-      Object.assign(musicFile, updatedMusicFile);
-
-      /*
-       * Get track folder.
-       */
       const trackFolder =
         await getMegaTrackFolder(
           track.id,
@@ -1554,17 +1979,126 @@ router.post(
           trackFolder,
         );
 
+      const oldMegaAudioNodeId =
+        existingFile?.megaNodeId ??
+        null;
+
+      const existingCover =
+        (trackFolder.children || [])
+          .filter(isCoverFile)[0];
+
+      const oldMegaCoverNodeId =
+        existingCover
+          ? megaService.getNodeId(
+            existingCover,
+          )
+          : null;
+
       /*
-       * Preserve existing thumbnail
-       * if replacement audio has no cover.
+       * ------------------------------------------------------------------
+       * 7. Create persistent replacement operation
+       * ------------------------------------------------------------------
+       */
+      const operation =
+        await createUploadOperation({
+          type:
+            UploadOperationType.REPLACE_AUDIO,
+
+          trackId:
+            track.id,
+        });
+
+      operationId = operation.id;
+
+      await updateUploadOperation(
+        operationId,
+        {
+          status:
+            UploadStatus.UPLOADING,
+
+          megaFolder:
+            trackFolderId,
+
+          trackId:
+            track.id,
+
+          oldMegaAudioNodeId,
+
+          oldMegaCoverNodeId,
+        },
+      );
+
+      console.log(
+        `[AUDIO REPLACEMENT] Operation ${operationId} started.`,
+      );
+
+      /*
+       * ------------------------------------------------------------------
+       * 8. Upload NEW audio first
+       *
+       * Old audio remains untouched.
+       * Use a unique filename to avoid collision in the track folder.
+       * ------------------------------------------------------------------
+       */
+      const audioExtension =
+        path
+          .extname(
+            file.originalname,
+          )
+          .toLowerCase() ||
+        '.mp3';
+
+      const stagedAudioFileName =
+        `audio-replacement-${operationId}${audioExtension}`;
+
+      console.log(
+        `[AUDIO REPLACEMENT] Uploading new audio as ${stagedAudioFileName}...`,
+      );
+
+      const uploadedAudio =
+        await megaService.uploadFile(
+          tempFilePath,
+          trackFolderId,
+          stagedAudioFileName,
+        );
+
+      uploadedAudioNodeId =
+        megaService.getNodeId(
+          uploadedAudio,
+        );
+
+      await updateUploadOperation(
+        operationId,
+        {
+          megaAudioNodeId:
+            uploadedAudioNodeId,
+        },
+      );
+
+      console.log(
+        `[AUDIO REPLACEMENT] New audio uploaded: ${uploadedAudioNodeId}`,
+      );
+
+      /*
+       * ------------------------------------------------------------------
+       * 9. Upload NEW cover, when embedded artwork exists
+       *
+       * The old cover is intentionally kept until the DB transaction
+       * commits successfully.
+       * ------------------------------------------------------------------
        */
       let thumbnailUrl =
         track.thumbnailUrl;
 
-      /*
-       * If new audio contains artwork,
-       * replace old cover.
-       */
+      let newCoverMimeType =
+        track.coverMimeType;
+
+      let newCoverWidth =
+        track.coverWidth;
+
+      let newCoverHeight =
+        track.coverHeight;
+
       if (
         metadata.coverBuffer &&
         metadata.coverMimeType &&
@@ -1575,13 +2109,6 @@ router.post(
 
         console.log(
           `[ARTWORK] Uploading replacement ${coverFileName}...`,
-        );
-
-        /*
-         * Remove existing cover first.
-         */
-        await deleteMegaCoverFiles(
-          trackFolder,
         );
 
         const uploadedCover =
@@ -1597,65 +2124,339 @@ router.post(
             uploadedCover,
           );
 
+        await updateUploadOperation(
+          operationId,
+          {
+            megaCoverNodeId:
+              uploadedCoverNodeId,
+          },
+        );
+
         thumbnailUrl =
           `/api/tracks/${track.id}/cover`;
+
+        newCoverMimeType =
+          metadata.coverMimeType;
+
+        newCoverWidth =
+          getMetadataNumber(
+            richMetadata,
+            'coverWidth',
+            'width',
+          ) ?? track.coverWidth;
+
+        newCoverHeight =
+          getMetadataNumber(
+            richMetadata,
+            'coverHeight',
+            'height',
+          ) ?? track.coverHeight;
 
         console.log(
           `[ARTWORK] New cover uploaded: ${uploadedCoverNodeId}`,
         );
+      } else {
+        console.log(
+          '[ARTWORK] New audio has no embedded artwork. Existing cover will be preserved.',
+        );
       }
 
       /*
-       * Update track.
+       * ------------------------------------------------------------------
+       * 10. Mark operation as entering DB commit phase
+       * ------------------------------------------------------------------
        */
-      const updatedTrack =
-        await prisma.track.update({
-          where: {
-            id:
-              track.id,
-          },
-
-          data: {
-            duration:
-              metadata.duration ||
-              track.duration,
-
-            albumArtist,
-            movie,
-            releaseYear,
-            releaseDate,
-            language,
-            explicit,
-            composer,
-            copyright,
-            publisher,
-            description,
-            trackNumber,
-            discNumber,
-            coverMimeType: metadata.coverMimeType || track.coverMimeType,
-            coverWidth: getMetadataNumber(richMetadata, 'coverWidth', 'width') ?? track.coverWidth,
-            coverHeight: getMetadataNumber(richMetadata, 'coverHeight', 'height') ?? track.coverHeight,
-            thumbnailUrl,
-          },
-        });
+      await updateUploadOperation(
+        operationId,
+        {
+          status:
+            UploadStatus.DB_COMMITTING,
+        },
+      );
 
       /*
-       * Remove temporary file.
+       * ------------------------------------------------------------------
+       * 11. SHORT DATABASE TRANSACTION
+       *
+       * No MEGA network calls occur inside this transaction.
+       * ------------------------------------------------------------------
+       */
+      const transactionResult =
+        await prisma.$transaction(
+          async (tx) => {
+            let committedMusicFile;
+
+            const technicalMetadata = {
+              codec:
+                optionalString(
+                  getMetadataValue(
+                    richMetadata,
+                    'codec',
+                    'codecName',
+                    'format',
+                  ),
+                ),
+
+              bitrate:
+                getMetadataNumber(
+                  richMetadata,
+                  'bitrate',
+                  'bitRate',
+                ),
+
+              sampleRate:
+                getMetadataNumber(
+                  richMetadata,
+                  'sampleRate',
+                  'sample_rate',
+                ),
+
+              bitsPerSample:
+                getMetadataNumber(
+                  richMetadata,
+                  'bitsPerSample',
+                  'bitDepth',
+                ),
+
+              channels:
+                getMetadataNumber(
+                  richMetadata,
+                  'channels',
+                  'channelCount',
+                ),
+            };
+
+            if (existingFile) {
+              committedMusicFile =
+                await tx.musicFile.update({
+                  where: {
+                    id:
+                      existingFile.id,
+                  },
+
+                  data: {
+                    megaNodeId:
+                      uploadedAudioNodeId!,
+
+                    fileName:
+                      stagedAudioFileName,
+
+                    mimeType:
+                      file.mimetype,
+
+                    fileSize:
+                      file.size,
+
+                    audioHash:
+                      audioHash!,
+
+                    ...technicalMetadata,
+                  },
+                });
+            } else {
+              committedMusicFile =
+                await tx.musicFile.create({
+                  data: {
+                    trackId:
+                      track.id,
+
+                    megaNodeId:
+                      uploadedAudioNodeId!,
+
+                    fileName:
+                      stagedAudioFileName,
+
+                    mimeType:
+                      file.mimetype,
+
+                    fileSize:
+                      file.size,
+
+                    audioHash:
+                      audioHash!,
+
+                    ...technicalMetadata,
+                  },
+                });
+            }
+
+            const committedTrack =
+              await tx.track.update({
+                where: {
+                  id: track.id,
+                },
+
+                data: {
+                  duration:
+                    metadata.duration ||
+                    track.duration,
+
+                  albumArtist,
+
+                  movie,
+
+                  releaseYear,
+
+                  releaseDate,
+
+                  language,
+
+                  explicit,
+
+                  composer,
+
+                  copyright,
+
+                  publisher,
+
+                  description,
+
+                  trackNumber,
+
+                  discNumber,
+
+                  coverMimeType:
+                    newCoverMimeType,
+
+                  coverWidth:
+                    newCoverWidth,
+
+                  coverHeight:
+                    newCoverHeight,
+
+                  thumbnailUrl,
+                },
+              });
+
+            await tx.uploadOperation.update({
+              where: {
+                id:
+                  operationId!,
+              },
+
+              data: {
+                status:
+                  UploadStatus.COMPLETED,
+
+                error:
+                  null,
+
+                leaseExpiresAt:
+                  null,
+
+                lastHeartbeatAt:
+                  null,
+              },
+            });
+
+            return {
+              track:
+                committedTrack,
+
+              musicFile:
+                committedMusicFile,
+            };
+          },
+        );
+
+      transactionCommitted = true;
+
+      console.log(
+        `[AUDIO REPLACEMENT] DB transaction committed for operation ${operationId}.`,
+      );
+
+      /*
+       * ------------------------------------------------------------------
+       * 12. Delete OLD MEGA resources ONLY AFTER DB COMMIT
+       * ------------------------------------------------------------------
+       */
+      if (
+        oldMegaAudioNodeId &&
+        oldMegaAudioNodeId !==
+        uploadedAudioNodeId
+      ) {
+        try {
+          await megaService.deleteFile(
+            oldMegaAudioNodeId,
+          );
+
+          console.log(
+            `[AUDIO REPLACEMENT] Old audio deleted: ${oldMegaAudioNodeId}`,
+          );
+        } catch (cleanupError) {
+          console.warn(
+            '[AUDIO REPLACEMENT] Could not delete old audio after commit:',
+            cleanupError,
+          );
+        }
+      }
+
+      /*
+       * Delete old cover(s) only when a new cover was actually uploaded.
+       */
+      if (uploadedCoverNodeId) {
+        try {
+          const refreshedTrackFolder =
+            await getMegaTrackFolder(
+              track.id,
+            );
+
+          await deleteMegaCoverFiles(
+            refreshedTrackFolder,
+            uploadedCoverNodeId,
+          );
+
+          console.log(
+            `[ARTWORK] Old cover cleanup completed. Kept ${uploadedCoverNodeId}.`,
+          );
+        } catch (cleanupError) {
+          console.warn(
+            '[ARTWORK] Could not complete old-cover cleanup:',
+            cleanupError,
+          );
+        }
+      }
+
+      /*
+       * ------------------------------------------------------------------
+       * 13. Remove local temporary upload
+       * ------------------------------------------------------------------
        */
       if (
         tempFilePath &&
-        fs.existsSync(
-          tempFilePath,
-        )
+        fs.existsSync(tempFilePath)
       ) {
-        fs.unlinkSync(
-          tempFilePath,
-        );
-
-        tempFilePath =
-          null;
+        try {
+          fs.unlinkSync(
+            tempFilePath,
+          );
+        } catch { }
       }
 
+      tempFilePath = null;
+
+      /*
+       * ------------------------------------------------------------------
+       * 14. Cache invalidation
+       *
+       * Cache failure must not roll back already committed DB/MEGA state.
+       * ------------------------------------------------------------------
+       */
+      try {
+        await invalidateTrackCache();
+        await invalidateAllFavoritesCaches();
+      } catch (cacheError) {
+        console.warn(
+          '[AUDIO REPLACEMENT] Cache invalidation failed after successful commit:',
+          cacheError,
+        );
+      }
+
+      /*
+       * ------------------------------------------------------------------
+       * 15. Return successful replacement
+       * ------------------------------------------------------------------
+       */
       return res
         .status(200)
         .json({
@@ -1663,9 +2464,10 @@ router.post(
             'Audio file uploaded/replaced successfully',
 
           track:
-            updatedTrack,
+            transactionResult.track,
 
-          musicFile,
+          musicFile:
+            transactionResult.musicFile,
 
           artwork: {
             uploaded:
@@ -1674,71 +2476,143 @@ router.post(
               ),
 
             url:
-              thumbnailUrl,
+              transactionResult.track
+                .thumbnailUrl,
           },
+
+          operationId,
         });
-    } catch (
-      error: any
-    ) {
+    } catch (error: any) {
+      if (isTrackOperationInProgressError(error)) {
+        if (tempFilePath && fs.existsSync(tempFilePath)) {
+          try {
+            fs.unlinkSync(tempFilePath);
+          } catch { }
+        }
+
+        tempFilePath = null;
+        return sendTrackOperationConflict(res);
+      }
+
       console.error(
-        'Audio upload error:',
+        '[AUDIO REPLACEMENT] Upload error:',
         error,
       );
 
       /*
-       * Remove newly uploaded cover.
+       * ------------------------------------------------------------------
+       * Before DB commit:
+       *   Delete ONLY newly uploaded resources.
+       *
+       * Old audio/cover remain untouched.
+       * ------------------------------------------------------------------
        */
       if (
-        uploadedCoverNodeId
+        operationId &&
+        !transactionCommitted
       ) {
         try {
-          await megaService.deleteFile(
-            uploadedCoverNodeId,
+          const rollbackResult =
+            await rollbackUploadOperation(
+              operationId,
+              error,
+              {
+                megaAudioNodeId:
+                  uploadedAudioNodeId,
+
+                megaCoverNodeId:
+                  uploadedCoverNodeId,
+
+                trackId:
+                  req.params.id,
+              },
+            );
+
+          console.log(
+            '[AUDIO REPLACEMENT] Rollback result:',
+            rollbackResult,
           );
-        } catch (
-          deleteError
-        ) {
-          console.warn(
-            'Could not remove uploaded cover:',
-            deleteError,
+        } catch (rollbackError) {
+          console.error(
+            '[AUDIO REPLACEMENT] Rollback itself failed:',
+            rollbackError,
           );
         }
       }
 
       /*
-       * Remove newly uploaded audio.
-       */
-      if (
-        uploadedAudioNodeId
-      ) {
-        try {
-          await megaService.deleteFile(
-            uploadedAudioNodeId,
-          );
-        } catch (
-          deleteError
-        ) {
-          console.warn(
-            'Could not remove uploaded audio:',
-            deleteError,
-          );
-        }
-      }
-
-      /*
-       * Remove temporary file.
+       * Remove temporary local upload.
        */
       if (
         tempFilePath &&
-        fs.existsSync(
-          tempFilePath,
-        )
+        fs.existsSync(tempFilePath)
       ) {
         try {
           fs.unlinkSync(
             tempFilePath,
           );
-        } catch {}
+        } catch { }
+      }
+
+      /*
+       * Handle a race where the database unique constraint rejects the
+       * new audioHash even though the application-level duplicate check
+       * already passed.
+       */
+      if (
+        error instanceof
+        Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002' &&
+        audioHash
+      ) {
+        const conflictingFile =
+          await prisma.musicFile.findFirst({
+            where: {
+              audioHash,
+              NOT: {
+                trackId:
+                  req.params.id,
+              },
+            },
+
+            select: {
+              track: {
+                select: {
+                  id: true,
+                  title: true,
+                  artist: true,
+                  album: true,
+                  thumbnailUrl: true,
+                },
+              },
+            },
+          }).catch(() => null);
+
+        if (
+          conflictingFile?.track
+        ) {
+          return res
+            .status(409)
+            .json(
+              getDuplicateResponse(
+                conflictingFile.track,
+              ),
+            );
+        }
+      }
+
+      /*
+       * Once the DB transaction has committed, never claim that the track
+       * was rolled back.
+       */
+      if (transactionCommitted) {
+        return res
+          .status(500)
+          .json({
+            error:
+              error?.message ||
+              'Track was committed, but the request could not be finalized.',
+          });
       }
 
       return res
@@ -1766,10 +2640,17 @@ router.delete(
     req: Request,
     res: Response,
   ) => {
-    try {
-      const { id } =
-        req.params;
+    let operationId: string | null = null;
+    let transactionCommitted = false;
 
+    try {
+      const { id } = req.params;
+
+      /*
+       * ------------------------------------------------------------------
+       * 1. Load the current audio record.
+       * ------------------------------------------------------------------
+       */
       const existingFile =
         await prisma.musicFile.findFirst({
           where: {
@@ -1788,49 +2669,246 @@ router.delete(
       }
 
       /*
-       * Delete audio from MEGA.
+       * ------------------------------------------------------------------
+       * 2. Locate the MEGA track folder.
+       *
+       * Nothing is deleted yet.
+       * ------------------------------------------------------------------
        */
-      try {
-        await megaService.deleteFile(
-          existingFile.megaNodeId,
+      await megaService.connect();
+
+      const trackFolder =
+        await findMegaTrackFolder(id);
+
+      const trackFolderId =
+        trackFolder
+          ? megaService.getNodeId(
+            trackFolder,
+          )
+          : null;
+
+      const oldMegaAudioNodeId =
+        existingFile.megaNodeId;
+
+      /*
+       * ------------------------------------------------------------------
+       * 3. Create persistent DELETE_AUDIO operation.
+       *
+       * The old MEGA node ID is stored before the DB deletion so startup
+       * recovery can finish the external cleanup after a crash.
+       * ------------------------------------------------------------------
+       */
+      const operation =
+        await createUploadOperation({
+          type:
+            UploadOperationType.DELETE_AUDIO,
+
+          trackId:
+            id,
+        });
+
+      operationId =
+        operation.id;
+
+      await updateUploadOperation(
+        operationId,
+        {
+          status:
+            UploadStatus.DB_COMMITTING,
+
+          megaFolder:
+            trackFolderId,
+
+          trackId:
+            id,
+
+          oldMegaAudioNodeId,
+        },
+      );
+
+      console.log(
+        `[DELETE AUDIO] Operation ${operationId} started for track ${id}.`,
+      );
+
+      /*
+       * ------------------------------------------------------------------
+       * 4. SHORT DATABASE TRANSACTION
+       *
+       * Delete only the PostgreSQL MusicFile row. Do not make MEGA calls
+       * inside the transaction.
+       * ------------------------------------------------------------------
+       */
+      await prisma.$transaction(
+        async (tx) => {
+          await tx.musicFile.delete({
+            where: {
+              id:
+                existingFile.id,
+            },
+          });
+
+          /*
+           * The DB deletion is now durable only when this transaction
+           * commits. The operation must remain ROLLING_BACK until the
+           * MEGA node itself has been deleted.
+           */
+          await tx.uploadOperation.update({
+            where: {
+              id:
+                operationId!,
+            },
+
+            data: {
+              status:
+                UploadStatus.ROLLING_BACK,
+
+              error:
+                null,
+            },
+          });
+        },
+      );
+
+      transactionCommitted =
+        true;
+
+      console.log(
+        `[DELETE AUDIO] Database transaction committed for operation ${operationId}.`,
+      );
+
+      /*
+       * ------------------------------------------------------------------
+       * 5. Delete OLD MEGA audio after DB commit.
+       *
+       * The cleanup service reads the persisted old node ID, so this step
+       * is recoverable if the process crashes before completion.
+       * ------------------------------------------------------------------
+       */
+      const cleanupResult =
+        await cleanupDeletedAudioOperation(
+          operationId,
+          undefined,
+          {
+            megaFolderNodeId:
+              trackFolderId,
+
+            oldMegaAudioNodeId:
+              oldMegaAudioNodeId,
+
+            trackId:
+              id,
+          },
         );
-      } catch (
-        error
-      ) {
-        console.warn(
-          'Could not delete file from MEGA:',
-          error,
+
+      if (!cleanupResult.success) {
+        console.error(
+          `[DELETE AUDIO] MEGA cleanup incomplete for operation ${operationId}:`,
+          cleanupResult.errors,
         );
+
+        return res
+          .status(500)
+          .json({
+            error:
+              'Audio was deleted from the database, but storage cleanup is incomplete.',
+            operationId,
+            cleanupErrors:
+              cleanupResult.errors,
+          });
       }
 
       /*
-       * Delete DB record.
+       * ------------------------------------------------------------------
+       * 6. Cache invalidation.
+       *
+       * Cache failure must never turn a successful deletion into a
+       * database rollback.
+       * ------------------------------------------------------------------
        */
-      await prisma.musicFile.delete({
-        where: {
-          id:
-            existingFile.id,
-        },
-      });
+      try {
+        await invalidateTrackCache();
+        await invalidateAllFavoritesCaches();
+      } catch (cacheError) {
+        console.warn(
+          '[DELETE AUDIO] Cache invalidation failed after successful deletion:',
+          cacheError,
+        );
+      }
+
+      console.log(
+        `[DELETE AUDIO] Operation ${operationId} completed successfully.`,
+      );
 
       return res
         .status(200)
         .json({
           message:
             'Audio file deleted successfully',
+
+          operationId,
         });
-    } catch (
-      error
-    ) {
+    } catch (error: any) {
+      if (isTrackOperationInProgressError(error)) {
+        return sendTrackOperationConflict(res);
+      }
+
       console.error(
-        'Delete audio error:',
+        '[DELETE AUDIO] Delete error:',
         error,
       );
+
+      /*
+       * Before DB commit:
+       *   old MEGA audio remains untouched.
+       *
+       * After DB commit:
+       *   never attempt to restore the MusicFile here. The operation row
+       *   remains the durable source of truth for external cleanup.
+       */
+      if (transactionCommitted) {
+        return res
+          .status(500)
+          .json({
+            error:
+              error?.message ||
+              'Audio was deleted, but the request could not be finalized.',
+
+            operationId,
+          });
+      }
+
+      if (operationId) {
+        try {
+          await prisma.uploadOperation.update({
+            where: {
+              id:
+                operationId,
+            },
+
+            data: {
+              status:
+                UploadStatus.FAILED,
+
+              error:
+                error?.message ||
+                'Audio deletion transaction failed.',
+              leaseExpiresAt: null,
+              lastHeartbeatAt: null,
+            },
+          });
+        } catch (operationError) {
+          console.warn(
+            '[DELETE AUDIO] Could not persist failed operation state:',
+            operationError,
+          );
+        }
+      }
 
       return res
         .status(500)
         .json({
           error:
+            error?.message ||
             'Internal server error deleting audio file',
         });
     }
@@ -1856,7 +2934,7 @@ router.post(
 
       const cleanup = () => {
         if (file?.path && fs.existsSync(file.path)) {
-          try { fs.unlinkSync(file.path); } catch {}
+          try { fs.unlinkSync(file.path); } catch { }
         }
       };
 
@@ -1929,6 +3007,9 @@ router.post(
 
       cleanup();
 
+      await invalidateTrackCache();
+      await invalidateAllFavoritesCaches();
+
       return res.status(200).json({
         message: 'Cover uploaded successfully.',
         track: updatedTrack,
@@ -1950,7 +3031,7 @@ router.post(
       }
 
       if (req.file?.path && fs.existsSync(req.file.path)) {
-        try { fs.unlinkSync(req.file.path); } catch {}
+        try { fs.unlinkSync(req.file.path); } catch { }
       }
 
       return res.status(500).json({
@@ -1969,59 +3050,362 @@ router.delete(
   '/tracks/:id/cover',
   authenticate,
   requireAdmin,
-  async (req: Request, res: Response) => {
+  async (
+    req: Request,
+    res: Response,
+  ) => {
+    let operationId: string | null = null;
+    let transactionCommitted = false;
+
     try {
       const { id } = req.params;
-      const track = await prisma.track.findUnique({
-        where: { id },
-        select: { id: true },
-      });
+
+      /*
+       * ------------------------------------------------------------------
+       * 1. Load the track.
+       * ------------------------------------------------------------------
+       */
+      const track =
+        await prisma.track.findUnique({
+          where: {
+            id,
+          },
+
+          select: {
+            id: true,
+          },
+        });
 
       if (!track) {
-        return res.status(404).json({ error: 'Track not found' });
+        return res
+          .status(404)
+          .json({
+            error:
+              'Track not found',
+          });
       }
 
+      /*
+       * ------------------------------------------------------------------
+       * 2. Locate the current MEGA cover.
+       *
+       * Nothing is deleted yet.
+       * ------------------------------------------------------------------
+       */
       await megaService.connect();
-      const trackFolder = await findMegaTrackFolder(id);
-      let deleted = false;
+
+      const trackFolder =
+        await findMegaTrackFolder(id);
+
+      const trackFolderId =
+        trackFolder
+          ? megaService.getNodeId(
+            trackFolder,
+          )
+          : null;
+
+      let oldMegaCoverNodeId:
+        string | null = null;
 
       if (trackFolder) {
-        const coverFiles = (trackFolder.children || []).filter(isCoverFile);
-        for (const coverFile of coverFiles) {
-          try {
-            await megaService.deleteFile(megaService.getNodeId(coverFile));
-            deleted = true;
-          } catch (error) {
-            console.warn(
-              `[ARTWORK] Could not delete cover '${coverFile.name}':`,
-              error,
+        const existingCover =
+          (trackFolder.children || [])
+            .filter(isCoverFile)[0];
+
+        if (existingCover) {
+          oldMegaCoverNodeId =
+            megaService.getNodeId(
+              existingCover,
             );
-          }
         }
       }
 
-      const updatedTrack = await prisma.track.update({
-        where: { id },
-        data: {
-          thumbnailUrl: null,
-          coverMimeType: null,
-          coverWidth: null,
-          coverHeight: null,
-        },
-      });
+      /*
+       * If there is neither a MEGA cover nor a DB cover reference, the
+       * request is idempotently resolved as "no cover present". We still
+       * clear the DB reference below when needed.
+       */
+      const currentTrack =
+        await prisma.track.findUnique({
+          where: {
+            id,
+          },
 
-      return res.status(200).json({
-        message: deleted
-          ? 'Cover deleted successfully.'
-          : 'Cover reference cleared. No cover file was found.',
-        track: updatedTrack,
-        artwork: { uploaded: false, url: null },
-      });
+          select: {
+            thumbnailUrl: true,
+            coverMimeType: true,
+            coverWidth: true,
+            coverHeight: true,
+          },
+        });
+
+      const hasDbCoverReference =
+        Boolean(
+          currentTrack?.thumbnailUrl ||
+          currentTrack?.coverMimeType ||
+          currentTrack?.coverWidth ||
+          currentTrack?.coverHeight,
+        );
+
+      if (
+        !oldMegaCoverNodeId &&
+        !hasDbCoverReference
+      ) {
+        return res
+          .status(200)
+          .json({
+            message:
+              'No cover is associated with this track.',
+
+            artwork: {
+              uploaded: false,
+              url: null,
+            },
+          });
+      }
+
+      /*
+       * ------------------------------------------------------------------
+       * 3. Create persistent DELETE_COVER operation.
+       *
+       * The old MEGA node ID is persisted before the DB update so startup
+       * recovery can finish the external cleanup after a crash.
+       * ------------------------------------------------------------------
+       */
+      const operation =
+        await createUploadOperation({
+          type:
+            UploadOperationType.DELETE_COVER,
+
+          trackId:
+            id,
+        });
+
+      operationId =
+        operation.id;
+
+      await updateUploadOperation(
+        operationId,
+        {
+          status:
+            UploadStatus.DB_COMMITTING,
+
+          megaFolder:
+            trackFolderId,
+
+          trackId:
+            id,
+
+          oldMegaCoverNodeId,
+        },
+      );
+
+      console.log(
+        `[DELETE COVER] Operation ${operationId} started for track ${id}.`,
+      );
+
+      /*
+       * ------------------------------------------------------------------
+       * 4. SHORT DATABASE TRANSACTION
+       *
+       * Clear the cover reference/metadata only. No MEGA calls occur
+       * inside the transaction.
+       * ------------------------------------------------------------------
+       */
+      const updatedTrack =
+        await prisma.$transaction(
+          async (tx) => {
+            const result =
+              await tx.track.update({
+                where: {
+                  id,
+                },
+
+                data: {
+                  thumbnailUrl:
+                    null,
+
+                  coverMimeType:
+                    null,
+
+                  coverWidth:
+                    null,
+
+                  coverHeight:
+                    null,
+                },
+              });
+
+            await tx.uploadOperation.update({
+              where: {
+                id:
+                  operationId!,
+              },
+
+              data: {
+                status:
+                  UploadStatus.ROLLING_BACK,
+
+                error:
+                  null,
+              },
+            });
+
+            return result;
+          },
+        );
+
+      transactionCommitted =
+        true;
+
+      console.log(
+        `[DELETE COVER] Database transaction committed for operation ${operationId}.`,
+      );
+
+      /*
+       * ------------------------------------------------------------------
+       * 5. Delete OLD MEGA cover after DB commit.
+       *
+       * If no old node exists, cleanup is still considered successful
+       * because the database reference has already been cleared.
+       * ------------------------------------------------------------------
+       */
+      const cleanupResult =
+        await cleanupDeletedCoverOperation(
+          operationId,
+          undefined,
+          {
+            megaFolderNodeId:
+              trackFolderId,
+
+            oldMegaCoverNodeId:
+              oldMegaCoverNodeId,
+
+            trackId:
+              id,
+          },
+        );
+
+      if (!cleanupResult.success) {
+        console.error(
+          `[DELETE COVER] MEGA cleanup incomplete for operation ${operationId}:`,
+          cleanupResult.errors,
+        );
+
+        return res
+          .status(500)
+          .json({
+            error:
+              'Cover reference was cleared from the database, but storage cleanup is incomplete.',
+
+            operationId,
+
+            cleanupErrors:
+              cleanupResult.errors,
+          });
+      }
+
+      /*
+       * ------------------------------------------------------------------
+       * 6. Cache invalidation.
+       * ------------------------------------------------------------------
+       */
+      try {
+        await invalidateTrackCache();
+        await invalidateAllFavoritesCaches();
+      } catch (cacheError) {
+        console.warn(
+          '[DELETE COVER] Cache invalidation failed after successful deletion:',
+          cacheError,
+        );
+      }
+
+      console.log(
+        `[DELETE COVER] Operation ${operationId} completed successfully.`,
+      );
+
+      return res
+        .status(200)
+        .json({
+          message:
+            oldMegaCoverNodeId
+              ? 'Cover deleted successfully.'
+              : 'Cover reference cleared. No cover file was found.',
+
+          track:
+            updatedTrack,
+
+          artwork: {
+            uploaded: false,
+            url: null,
+          },
+
+          operationId,
+        });
     } catch (error: any) {
-      console.error('Delete cover error:', error);
-      return res.status(500).json({
-        error: error?.message || 'Internal server error deleting cover',
-      });
+      if (isTrackOperationInProgressError(error)) {
+        return sendTrackOperationConflict(res);
+      }
+
+      console.error(
+        '[DELETE COVER] Delete error:',
+        error,
+      );
+
+      /*
+       * Before DB commit:
+       *   old MEGA cover remains untouched.
+       *
+       * After DB commit:
+       *   never attempt to restore the DB cover reference here. The
+       *   operation row remains the durable source of truth for cleanup.
+       */
+      if (transactionCommitted) {
+        return res
+          .status(500)
+          .json({
+            error:
+              error?.message ||
+              'Cover reference was cleared, but the request could not be finalized.',
+
+            operationId,
+          });
+      }
+
+      if (operationId) {
+        try {
+          await prisma.uploadOperation.update({
+            where: {
+              id:
+                operationId,
+            },
+
+            data: {
+              status:
+                UploadStatus.FAILED,
+
+              error:
+                error?.message ||
+                'Cover deletion transaction failed.',
+              leaseExpiresAt: null,
+              lastHeartbeatAt: null,
+            },
+          });
+        } catch (operationError) {
+          console.warn(
+            '[DELETE COVER] Could not persist failed operation state:',
+            operationError,
+          );
+        }
+      }
+
+      return res
+        .status(500)
+        .json({
+          error:
+            error?.message ||
+            'Internal server error deleting cover',
+        });
     }
   },
 );
@@ -2040,10 +3424,18 @@ router.delete(
     req: Request,
     res: Response,
   ) => {
-    try {
-      const { id } =
-        req.params;
+    let operationId: string | null = null;
 
+    let transactionCommitted = false;
+
+    try {
+      const { id } = req.params;
+
+      /*
+       * ------------------------------------------------------------------
+       * 1. Load the track and its current audio.
+       * ------------------------------------------------------------------
+       */
       const track =
         await prisma.track.findUnique({
           where: {
@@ -2059,57 +3451,307 @@ router.delete(
         return res
           .status(404)
           .json({
-            error:
-              'Track not found',
+            error: 'Track not found',
           });
       }
 
+      /*
+       * ------------------------------------------------------------------
+       * 2. Connect to MEGA and locate the track folder.
+       *
+       * Nothing is deleted yet.
+       * ------------------------------------------------------------------
+       */
       await megaService.connect();
 
       const trackFolder =
         await findMegaTrackFolder(id);
 
-      for (const musicFile of track.musicFiles) {
-        try {
-          await megaService.deleteFile(
-            musicFile.megaNodeId,
-          );
-        } catch (error) {
-          console.warn(
-            '[MEGA] Could not delete track audio:',
-            error,
-          );
+      const trackFolderId =
+        trackFolder
+          ? megaService.getNodeId(
+            trackFolder,
+          )
+          : null;
+
+      /*
+       * Capture the current audio node.
+       *
+       * The current application normally has one MusicFile per Track.
+       */
+      const oldMegaAudioNodeId =
+        track.musicFiles[0]
+          ?.megaNodeId ?? null;
+
+      /*
+       * Capture the current cover node.
+       *
+       * The folder itself is NOT deleted.
+       */
+      let oldMegaCoverNodeId:
+        string | null = null;
+
+      if (trackFolder) {
+        const existingCover =
+          (trackFolder.children || [])
+            .filter(isCoverFile)[0];
+
+        if (existingCover) {
+          oldMegaCoverNodeId =
+            megaService.getNodeId(
+              existingCover,
+            );
         }
       }
 
-      if (trackFolder) {
-        await deleteMegaCoverFiles(
-          trackFolder,
+      /*
+       * ------------------------------------------------------------------
+       * 3. Create persistent DELETE_TRACK operation.
+       *
+       * This must happen BEFORE the database deletion so a crash can be
+       * recovered later.
+       * ------------------------------------------------------------------
+       */
+      const operation =
+        await createUploadOperation({
+          type:
+            UploadOperationType.DELETE_TRACK,
+
+          trackId:
+            track.id,
+        });
+
+      operationId =
+        operation.id;
+
+      await updateUploadOperation(
+        operationId,
+        {
+          status:
+            UploadStatus.DB_COMMITTING,
+
+          megaFolder:
+            trackFolderId,
+
+          trackId:
+            track.id,
+
+          oldMegaAudioNodeId,
+
+          oldMegaCoverNodeId,
+        },
+      );
+
+      console.log(
+        `[DELETE TRACK] Operation ${operationId} started for track ${track.id}.`,
+      );
+
+      /*
+       * ------------------------------------------------------------------
+       * 4. DATABASE TRANSACTION
+       *
+       * Track + cascading relations are deleted atomically.
+       *
+       * We deliberately mark the operation ROLLING_BACK rather than
+       * COMPLETED because MEGA cleanup has NOT happened yet.
+       *
+       * If the process crashes immediately after this transaction,
+       * startup recovery will see the stale operation and clean MEGA.
+       * ------------------------------------------------------------------
+       */
+      await prisma.$transaction(
+        async (tx) => {
+          await tx.track.delete({
+            where: {
+              id,
+            },
+          });
+
+          await tx.uploadOperation.update({
+            where: {
+              id:
+                operationId!,
+            },
+
+            data: {
+              status:
+                UploadStatus.ROLLING_BACK,
+
+              error:
+                null,
+            },
+          });
+        },
+      );
+
+      transactionCommitted =
+        true;
+
+      console.log(
+        `[DELETE TRACK] Database transaction committed for operation ${operationId}.`,
+      );
+
+      /*
+       * ------------------------------------------------------------------
+       * 5. Delete OLD MEGA resources after DB commit.
+       *
+       * cleanupDeletedTrackOperation() reads the persisted old node IDs
+       * from UploadOperation, so this remains recoverable.
+       * ------------------------------------------------------------------
+       */
+      const cleanupResult =
+        await cleanupDeletedTrackOperation(
+          operationId,
+          undefined,
+          {
+            megaFolderNodeId:
+              trackFolderId,
+
+            oldMegaAudioNodeId:
+              oldMegaAudioNodeId,
+
+            oldMegaCoverNodeId:
+              oldMegaCoverNodeId,
+
+            trackId:
+              track.id,
+          },
+        );
+
+      if (!cleanupResult.success) {
+        /*
+         * The DB deletion already succeeded.
+         *
+         * Do not pretend the track was restored.
+         * The operation remains ROLLING_BACK so startup recovery can retry.
+         */
+        console.error(
+          `[DELETE TRACK] MEGA cleanup incomplete for operation ${operationId}:`,
+          cleanupResult.errors,
+        );
+
+        return res
+          .status(500)
+          .json({
+            error:
+              'Track was deleted from the database, but storage cleanup is incomplete.',
+            operationId,
+            cleanupErrors:
+              cleanupResult.errors,
+          });
+      }
+
+      /*
+       * ------------------------------------------------------------------
+       * 6. Cache invalidation.
+       *
+       * Cache failure must not turn a successful deletion into a rollback.
+       * ------------------------------------------------------------------
+       */
+      try {
+        await invalidateTrackCache();
+        await invalidateAllFavoritesCaches();
+      } catch (cacheError) {
+        console.warn(
+          '[DELETE TRACK] Cache invalidation failed after successful deletion:',
+          cacheError,
         );
       }
 
-      await prisma.track.delete({
-        where: {
-          id,
-        },
-      });
+      console.log(
+        `[DELETE TRACK] Operation ${operationId} completed successfully.`,
+      );
 
       return res
         .status(200)
         .json({
           message:
             'Track deleted successfully',
+
+          operationId,
         });
-    } catch (error) {
+    } catch (error: any) {
+      if (isTrackOperationInProgressError(error)) {
+        return sendTrackOperationConflict(res);
+      }
+
       console.error(
-        'Delete track error:',
+        '[DELETE TRACK] Delete error:',
         error,
       );
+
+      /*
+       * IMPORTANT:
+       *
+       * Before DB commit:
+       *   nothing from the old track has been deleted.
+       *
+       * Therefore there is nothing to compensate in MEGA.
+       *
+       * After DB commit:
+       *   never attempt to restore the Track automatically here.
+       *
+       * The DELETE_TRACK operation remains the source of truth for
+       * external cleanup.
+       */
+      if (
+        transactionCommitted
+      ) {
+        return res
+          .status(500)
+          .json({
+            error:
+              error?.message ||
+              'Track was deleted, but the request could not be finalized.',
+
+            operationId,
+          });
+      }
+
+      /*
+       * If the operation was created but the DB transaction failed,
+       * remove the operation record only when possible.
+       *
+       * No MEGA deletion is necessary because the Track was never
+       * committed as deleted.
+       */
+      if (
+        operationId
+      ) {
+        try {
+          await prisma.uploadOperation.update({
+            where: {
+              id:
+                operationId,
+            },
+
+            data: {
+              status:
+                UploadStatus.FAILED,
+
+              error:
+                error?.message ||
+                'Track deletion transaction failed.',
+              // Terminal state → release operation lease
+              leaseExpiresAt: null,
+              lastHeartbeatAt: null,
+            },
+          });
+        } catch (
+        operationError
+        ) {
+          console.warn(
+            '[DELETE TRACK] Could not persist failed operation state:',
+            operationError,
+          );
+        }
+      }
 
       return res
         .status(500)
         .json({
           error:
+            error?.message ||
             'Internal server error deleting track',
         });
     }
@@ -2243,21 +3885,47 @@ router.patch(
           : (current?.tags || []).map((item: any) => item.tag.name);
       }
 
-      await prisma.track.update({ where: { id }, data });
+      await prisma.$transaction(async (tx) => {
+        await tx.track.update({
+          where: { id },
+          data,
+        });
 
-      if (taxonomyChanged) {
-        await syncTrackTaxonomy(id, finalGenres, finalTags);
-      }
+        if (artist !== undefined) {
+          await syncTrackArtists(
+            tx,
+            id,
+            String(artist).trim(),
+          );
+        }
+
+        if (taxonomyChanged) {
+          await syncTrackTaxonomy(
+            tx,
+            id,
+            finalGenres,
+            finalTags,
+          );
+        }
+      });
 
       const finalTrack = await prisma.track.findUnique({
         where: { id },
         include: {
           musicFiles: true,
           sources: true,
+          artists: {
+            include: {
+              artist: true,
+            },
+          },
           genres: { include: { genre: true } },
           tags: { include: { tag: true } },
         },
       });
+
+      await invalidateTrackCache();
+      await invalidateAllFavoritesCaches();
 
       return res.status(200).json({
         message: 'Track metadata updated successfully',

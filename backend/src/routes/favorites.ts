@@ -1,12 +1,30 @@
 import { Router, Request, Response } from 'express';
 import { prisma } from '../config/db';
 import { authenticate } from '../middleware/auth';
+import {
+  invalidateFavoritesCache,
+  redisKeys,
+  redisService,
+  redisTtl,
+} from '../services/redisService';
 
 const router = Router();
 
 // GET /api/favorites
 router.get('/', authenticate, async (req: Request, res: Response) => {
   try {
+    const cacheKey =
+      redisKeys.favoritesForUser(req.user!.id);
+
+    const cachedTracks =
+      await redisService.getJson<any[]>(
+        cacheKey,
+      );
+
+    if (cachedTracks) {
+      return res.status(200).json(cachedTracks);
+    }
+
     const favorites = await prisma.favorite.findMany({
       where: { userId: req.user!.id },
       include: {
@@ -20,6 +38,11 @@ router.get('/', authenticate, async (req: Request, res: Response) => {
     });
     // Return list of tracks
     const tracks = favorites.map(fav => fav.track);
+    await redisService.setJson(
+      cacheKey,
+      tracks,
+      redisTtl.favorites,
+    );
     return res.status(200).json(tracks);
   } catch (error) {
     console.error('Fetch favorites error:', error);
@@ -63,6 +86,8 @@ router.post('/:trackId', authenticate, async (req: Request, res: Response) => {
       }
     });
 
+    await invalidateFavoritesCache(req.user!.id);
+
     return res.status(201).json({ message: 'Track added to favorites', track });
   } catch (error) {
     console.error('Add favorite error:', error);
@@ -98,6 +123,8 @@ router.delete('/:trackId', authenticate, async (req: Request, res: Response) => 
         }
       }
     });
+
+    await invalidateFavoritesCache(req.user!.id);
 
     return res.status(200).json({ message: 'Track removed from favorites successfully' });
   } catch (error) {
