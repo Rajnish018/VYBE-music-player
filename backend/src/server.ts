@@ -110,6 +110,7 @@ if (
    * Kubernetes ingress
    * Cloud proxy
    */
+
   app.set('trust proxy', 1);
 }
 
@@ -330,13 +331,18 @@ app.get(
     --------------------------------------------- */
 
     try {
-      if (redis.isReady) {
-        const result =
-          await redis.ping();
+      /*
+       * Upstash Redis uses request-based REST
+       * communication. There is no isReady
+       * connection-state property.
+       *
+       * Therefore directly ping Redis.
+       */
 
-        if (result === 'PONG') {
-          redisStatus = 'up';
-        }
+      const result = await redis.ping();
+
+      if (result === 'PONG') {
+        redisStatus = 'up';
       }
     } catch (error) {
       console.error(
@@ -401,13 +407,15 @@ app.get(
     }
 
     try {
-      if (redis.isReady) {
-        const result =
-          await redis.ping();
+      /*
+       * Upstash Redis is REST based.
+       * Do not use redis.isReady.
+       */
 
-        if (result === 'PONG') {
-          redisStatus = 'up';
-        }
+      const result = await redis.ping();
+
+      if (result === 'PONG') {
+        redisStatus = 'up';
       }
     } catch {
       redisStatus = 'down';
@@ -440,10 +448,23 @@ app.get(
   },
 );
 
+/* =========================================================
+   FAVICON
+========================================================= */
+
 // get favicon.ico requests out of the logs
-app.get('/favicon.ico', (_req, res) => {
-  res.sendFile(path.join(__dirname, '../public/favicon.ico'));
-});
+
+app.get(
+  '/favicon.ico',
+  (_req, res) => {
+    res.sendFile(
+      path.join(
+        __dirname,
+        '../public/favicon.ico',
+      ),
+    );
+  },
+);
 
 /* =========================================================
    API ROUTES
