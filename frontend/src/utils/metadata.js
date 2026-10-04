@@ -17,59 +17,307 @@ export const emptyTrackMetadata = {
   artworkHeight: 0,
 };
 
+/* =========================================================
+   DOWNLOAD / WEBSITE SOURCE PATTERNS
+   ========================================================= */
+
+const SOURCE_REGEX =
+  '(?:www\\.)?' +
+  '(?:pagalnew|pagalworld|pagalworlds|koshalworld|' +
+  'mr[\\s-]*jatt|dj[\\s-]*punjab|dj[\\s-]*maza|' +
+  'wynk|jiosaavn|gaana)' +
+  '(?:\\.(?:com|in|net|org))?';
+
+
+/* =========================================================
+   GENERAL CLEANER
+   ========================================================= */
+
+export function cleanMetadataValue(value = '') {
+  let result = String(value ?? '');
+
+  result = result
+    .replace(/\u00A0/g, ' ')
+    .replace(/[‐-‒–—―]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // Remove:
+  // (PagalNew)
+  // [PagalNew]
+  // {PagalNew}
+  // (PagalNew.com)
+  result = result.replace(
+    new RegExp(
+      `\\s*[([{]\\s*${SOURCE_REGEX}\\s*[)\\]}]`,
+      'gi'
+    ),
+    ''
+  );
+
+  // Remove:
+  // - PagalNew
+  // - PagalWorld
+  // - KoshalWorld
+  // - Mr Jatt
+  // - DJ Punjab
+  result = result.replace(
+    new RegExp(
+      `\\s*[-|_:]\\s*${SOURCE_REGEX}\\s*$`,
+      'gi'
+    ),
+    ''
+  );
+
+  // Remove:
+  // Download from PagalNew
+  // Downloaded from PagalNew
+  // Source: PagalNew
+  result = result.replace(
+    new RegExp(
+      `\\s*(?:download(?:ed)?\\s*(?:from|at)?|source\\s*[:=-]?)\\s*${SOURCE_REGEX}\\s*$`,
+      'gi'
+    ),
+    ''
+  );
+
+  // Remove bitrate / sample rate.
+  result = result.replace(
+    /\s*[\(\[\{][^\)\]\}]*\b(?:kbps|kb\/s|kbs|kbits?\/s|khz|hz)\b[^\)\]\}]*[\)\]\}]/gi,
+    ' '
+  );
+
+  return result
+    .replace(/\s+([)\]}])/g, '$1')
+    .replace(/([([{])\s+/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+
+/* =========================================================
+   TITLE CLEANER
+   ========================================================= */
+
+export function cleanTrackTitle(value = '') {
+  let result = String(value ?? '');
+
+  result = result
+    .replace(/\u00A0/g, ' ')
+    .replace(/[‐-‒–—―]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  for (let pass = 0; pass < 10; pass += 1) {
+    const previous = result;
+
+    // (PagalNew)
+    // [PagalNew]
+    // {PagalNew}
+    result = result.replace(
+      new RegExp(
+        `\\s*[([{]\\s*${SOURCE_REGEX}\\s*[)\\]}]\\s*$`,
+        'i'
+      ),
+      ''
+    );
+
+    // - PagalNew
+    // - PagalWorld
+    // - KoshalWorld
+    // - Mr Jatt
+    // - DJ Punjab
+    result = result.replace(
+      new RegExp(
+        `\\s*[-|_:]\\s*${SOURCE_REGEX}\\s*$`,
+        'i'
+      ),
+      ''
+    );
+
+    // Download from PagalNew
+    result = result.replace(
+      new RegExp(
+        `\\s*(?:download(?:ed)?\\s*(?:from|at)?|source\\s*[:=-]?)\\s*${SOURCE_REGEX}\\s*$`,
+        'i'
+      ),
+      ''
+    );
+
+    // 320 Kbps
+    // 256 kbps
+    // 44.1 kHz
+    result = result.replace(
+      /\s*[-|_:]?\s*\(?\s*\d+(?:\.\d+)?\s*(?:kbps|kb\/s|kbs|kbits?\/s|khz|hz)\s*\)?\s*$/i,
+      ''
+    );
+
+    // Song - 01
+    // Song - 1
+    result = result.replace(
+      /\s*[-|_:]\s*\d+\s*$/,
+      ''
+    );
+
+    // Song 01
+    result = result.replace(
+      /\s+\d+\s*$/,
+      ''
+    );
+
+    result = result.trim();
+
+    if (result === previous) {
+      break;
+    }
+  }
+
+  return result
+    .replace(/\s+([)\]}])/g, '$1')
+    .replace(/([([{])\s+/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+
+/* =========================================================
+   OTHER METADATA CLEANERS
+   ========================================================= */
+
+export function cleanArtist(value = '') {
+  return cleanMetadataValue(value);
+}
+
+export function cleanAlbum(value = '') {
+  return cleanMetadataValue(value);
+}
+
+export function cleanGenre(value = '') {
+  const result = cleanMetadataValue(value);
+
+  if (!result) {
+    return '';
+  }
+
+  const lower = result.toLowerCase();
+
+  if (
+    lower.includes('pagalnew') ||
+    lower.includes('pagalworld') ||
+    lower.includes('koshalworld') ||
+    lower.includes('www.') ||
+    lower.includes('.com') ||
+    lower.includes('.in')
+  ) {
+    return '';
+  }
+
+  return result;
+}
+
+export function cleanYear(value) {
+  if (
+    value === undefined ||
+    value === null ||
+    value === ''
+  ) {
+    return '';
+  }
+
+  const year = Number(value);
+
+  if (
+    !Number.isInteger(year) ||
+    year < 1800 ||
+    year > 2200
+  ) {
+    return '';
+  }
+
+  return String(year);
+}
+
+
+/* =========================================================
+   ARTWORK
+   ========================================================= */
+
+function bytesToDataUrl(data, mimeType) {
+  if (!data || !data.length) {
+    return '';
+  }
+
+  const bytes =
+    data instanceof Uint8Array
+      ? data
+      : new Uint8Array(data);
+
+  let binary = '';
+
+  const chunkSize = 0x8000;
+
+  for (
+    let index = 0;
+    index < bytes.length;
+    index += chunkSize
+  ) {
+    const chunk = bytes.subarray(
+      index,
+      Math.min(index + chunkSize, bytes.length)
+    );
+
+    binary += String.fromCharCode(...chunk);
+  }
+
+  return `data:${mimeType || 'image/jpeg'};base64,${btoa(binary)}`;
+}
+
+
+/* =========================================================
+   DURATION
+   ========================================================= */
+function formatDuration(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return '';
+  }
+
+  const totalSeconds = Math.round(seconds);
+  const minutes = Math.floor(totalSeconds / 60);
+  const remainingSeconds = totalSeconds % 60;
+
+  return `${minutes}:${String(remainingSeconds).padStart(2, '0')}`;
+}
+
+
+/* =========================================================
+   FILENAME FALLBACK
+   ========================================================= */
+
 function cleanFilePart(value = '') {
-  return value
+  return String(value)
     .replace(/\.[^/.]+$/, '')
     .replace(/[_]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
-function cleanTrackTitle(value = '') {
-  return value
-    .replace(
-      /\s*\([^)]*\b(?:kbps|kb\/s|kbs|khz|hz)\b[^)]*\)/gi,
-      '',
-    )
-    .replace(/\s*[-–—]\s*\d+\s*$/g, '')
-    .replace(/\s+\d+\s*$/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function titleCase(value = '') {
-  return value
-    .split(' ')
-    .filter(Boolean)
-    .map(
-      (part) =>
-        part.charAt(0).toUpperCase() +
-        part.slice(1),
-    )
-    .join(' ');
-}
-
-/**
- * Filename fallback.
- *
- * Example:
- * "Farak - Taare.mp3"
- *
- * becomes:
- * artist = Farak
- * title  = Taare
- */
-
-
 export function inferTrackMetadata(file) {
-  const baseName = cleanFilePart(file?.name || '');
+  const baseName = cleanFilePart(
+    file?.name || ''
+  );
 
-  const [artistPart, ...titleParts] = baseName.split(
-    /\s+-\s+|\s+--\s+/,
+  const [
+    artistPart,
+    ...titleParts
+  ] = baseName.split(
+    /\s+-\s+|\s+--\s+/
   );
 
   const hasArtistTitle =
-    Boolean(artistPart) && titleParts.length > 0;
+    Boolean(
+      artistPart &&
+      titleParts.length > 0
+    );
 
   let title = hasArtistTitle
     ? titleParts.join(' - ')
@@ -80,169 +328,231 @@ export function inferTrackMetadata(file) {
     : 'Unknown Artist';
 
   title = cleanTrackTitle(title);
-  artist = artist.trim();
+  artist = cleanArtist(artist);
 
   return {
     ...emptyTrackMetadata,
 
-    title: titleCase(
+    title:
       title || 'Untitled Track',
-    ),
 
-    artist: titleCase(
+    artist:
       artist || 'Unknown Artist',
-    ),
 
     album: 'Single',
   };
 }
 
-/**
- * Convert embedded artwork bytes into a browser-previewable
- * data URL.
- */
-function bytesToDataUrl(data, mimeType) {
-  if (!data || !data.length || !mimeType) {
-    return '';
-  }
 
-  let binary = '';
+/* =========================================================
+   EMBEDDED METADATA EXTRACTION
+   ========================================================= */
 
-  const bytes =
-    data instanceof Uint8Array
-      ? data
-      : new Uint8Array(data);
-
-  const chunkSize = 0x8000;
-
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    const chunk = bytes.subarray(
-      i,
-      Math.min(i + chunkSize, bytes.length),
-    );
-
-    binary += String.fromCharCode(...chunk);
-  }
-
-  return `data:${mimeType};base64,${btoa(binary)}`;
-}
-
-/**
- * Convert seconds to the format used by the admin UI.
- */
-function formatDuration(seconds) {
-  if (!Number.isFinite(seconds) || seconds <= 0) {
-    return '';
-  }
-
-  return String(Math.max(1, Math.round(seconds)));
-}
-
-/**
- * Read actual embedded metadata from the audio file.
- */
 export async function readEmbeddedMetadata(file) {
   if (!file) {
-    return emptyTrackMetadata;
+    return {
+      ...emptyTrackMetadata,
+    };
   }
 
-  console.log(
-    '[AUDIO METADATA] Reading:',
-    file.name,
-  );
-
-  const metadata = await parseBlob(file, {
-    duration: true,
-    skipCovers: false,
-  });
-
-  console.log(
-    '[AUDIO METADATA] Full:',
-    metadata,
-  );
-
-  console.log(
-    '[AUDIO METADATA] Common:',
-    metadata.common,
-  );
-
-  console.log(
-    '[AUDIO METADATA] Pictures:',
-    metadata.common?.picture,
-  );
-
-  const common = metadata.common || {};
-
-  const cover = selectCover(
-    common.picture || [],
-  );
-
-  console.log(
-    '[AUDIO METADATA] Selected cover:',
-    cover,
-  );
-
-  const artworkMimeType =
-    cover?.format || '';
-
-  const artworkSize =
-    cover?.data?.byteLength || 0;
-
-  const thumbnailUrl =
-    cover?.data && artworkMimeType
-      ? bytesToDataUrl(
-          cover.data,
-          artworkMimeType,
-        )
-      : '';
-
-  const title =
-    common.title?.trim() || '';
-
-  const artist =
-    common.artist?.trim() ||
-    common.artists?.[0]?.trim() ||
-    '';
-
-  const album =
-    common.album?.trim() || '';
-
-  const genre =
-    common.genre?.[0]?.trim() || '';
-
-  const year =
-    common.year
-      ? String(common.year)
-      : '';
-
-  const duration =
-    formatDuration(
-      metadata.format?.duration,
+  try {
+    const metadata = await parseBlob(
+      file,
+      {
+        duration: true,
+        skipCovers: false,
+      }
     );
 
-  return {
-    ...emptyTrackMetadata,
+    const common =
+      metadata?.common || {};
 
-    title,
-    artist,
-    album,
-    genre,
-    year,
-    duration,
+    const format =
+      metadata?.format || {};
 
-    thumbnailUrl,
+    /* -------------------------
+       ARTWORK
+       ------------------------- */
 
-    hasArtwork: Boolean(
-      cover?.data?.length,
-    ),
+    const pictures =
+      Array.isArray(common.picture)
+        ? common.picture
+        : [];
 
-    artworkMimeType,
+    const cover =
+      selectCover(pictures);
 
-    artworkSize,
+    const artworkData =
+      cover?.data || null;
 
-    artworkType:
-      cover?.type || 'Cover (front)',
-  };
+    const artworkMimeType =
+      cover?.format || '';
 
-  
+    const artworkSize =
+      artworkData?.byteLength || 0;
+
+    const artworkType =
+      cover?.type ||
+      'Cover (front)';
+
+    const thumbnailUrl =
+      artworkData &&
+      artworkMimeType
+        ? bytesToDataUrl(
+            artworkData,
+            artworkMimeType
+          )
+        : '';
+
+    const artworkWidth =
+      Number.isFinite(cover?.width)
+        ? cover.width
+        : 0;
+
+    const artworkHeight =
+      Number.isFinite(cover?.height)
+        ? cover.height
+        : 0;
+
+
+    /* -------------------------
+       TITLE
+       ------------------------- */
+
+    const rawTitle =
+      typeof common.title === 'string'
+        ? common.title.trim()
+        : '';
+
+
+    /* -------------------------
+       ARTIST
+       ------------------------- */
+
+    const rawArtist =
+      typeof common.artist === 'string'
+        ? common.artist.trim()
+        : Array.isArray(common.artists)
+          ? common.artists
+              .filter(Boolean)
+              .join(', ')
+          : '';
+
+
+    /* -------------------------
+       ALBUM
+       ------------------------- */
+
+    const rawAlbum =
+      typeof common.album === 'string'
+        ? common.album.trim()
+        : '';
+
+
+    /* -------------------------
+       GENRE
+       ------------------------- */
+
+    const rawGenre =
+      Array.isArray(common.genre)
+        ? common.genre[0] || ''
+        : typeof common.genre === 'string'
+          ? common.genre
+          : '';
+
+
+    /* -------------------------
+       CLEAN
+       ------------------------- */
+
+    const title =
+      cleanTrackTitle(rawTitle);
+
+    const artist =
+      cleanArtist(rawArtist);
+
+    const album =
+      cleanAlbum(rawAlbum);
+
+    const genre =
+      cleanGenre(rawGenre);
+
+    const year =
+      cleanYear(common.year);
+
+    const duration =
+      formatDuration(
+        format.duration
+      );
+
+
+    /* -------------------------
+       FILENAME FALLBACK
+       ------------------------- */
+
+    const filenameMetadata =
+      inferTrackMetadata(file);
+
+    const finalTitle =
+      title ||
+      filenameMetadata.title;
+
+    const finalArtist =
+      artist ||
+      filenameMetadata.artist;
+
+    const finalAlbum =
+      album ||
+      filenameMetadata.album;
+
+
+    return {
+      ...emptyTrackMetadata,
+
+      title:
+        finalTitle ||
+        'Untitled Track',
+
+      artist:
+        finalArtist ||
+        'Unknown Artist',
+
+      album:
+        finalAlbum ||
+        'Single',
+
+      genre,
+
+      year,
+
+      duration,
+
+      thumbnailUrl,
+
+      hasArtwork:
+        Boolean(
+          artworkData &&
+          artworkData.length > 0
+        ),
+
+      artworkMimeType,
+
+      artworkSize,
+
+      artworkType,
+
+      artworkFile: null,
+
+      artworkWidth,
+
+      artworkHeight,
+    };
+  } catch (error) {
+    console.error(
+      '[AUDIO METADATA] Failed:',
+      error
+    );
+
+    return inferTrackMetadata(file);
+  }
 }

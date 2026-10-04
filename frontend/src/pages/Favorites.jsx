@@ -1,5 +1,6 @@
 import Icon from '../components/Icons';
 import TrackList from '../components/TrackList';
+import  PageHeader  from '../components/PageHeader';
 
 function Favorites({
   tracks,
@@ -14,12 +15,11 @@ function Favorites({
 }) {
   return (
     <>
-      <header className="page-heading compact-heading">
-        <p className="eyebrow">Favorites</p>
-        <h1>Your repeat listens</h1>
-        <p>{tracks.length} favorite tracks loaded from your account.</p>
-      </header>
-
+      <PageHeader
+        eyebrow="Favorites"
+        title="Favorite Tracks"
+        description="Browse your favorite tracks."
+      />
       <section className="library-header">
         <div>
           <h2>Favorite tracks</h2>

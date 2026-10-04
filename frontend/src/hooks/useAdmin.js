@@ -8,12 +8,17 @@ import {
 import {
   emptyTrackMetadata,
 } from '../utils/metadata';
+import { useAppStore } from '../store/appStore';
 
 export function useAdmin({
   token,
   refreshLibrary,
   logout,
 }) {
+  const addTrack = useAppStore(
+    (state) => state.addTrack,
+  );
+
   const [
     uploadForm,
     setUploadForm,
@@ -67,6 +72,7 @@ export function useAdmin({
       setUploadForm,
       setUploadFile,
       refreshLibrary,
+      onTrackUploaded: addTrack,
       logout,
     });
   }

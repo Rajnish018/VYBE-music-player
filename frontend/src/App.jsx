@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   BrowserRouter,
   Navigate,
@@ -24,7 +24,11 @@ import Albums from './pages/Albums/Albums';
 import SettingsPage from './pages/Settings/SettingsPage';
 import ManageSongs from './pages/Admin/ManageSongs';
 
-import { toggleFavorite as toggleFavoriteHandler } from './handlers/favoriteHandlers';
+import {
+  toggleFavorite as toggleFavoriteHandler,
+} from './handlers/favoriteHandlers';
+
+import { saveTrackToLibrary } from './handlers/libraryHandlers';
 
 import { useAdmin } from './hooks/useAdmin';
 import { useAuth } from './hooks/useAuth';
@@ -32,6 +36,7 @@ import { useDiscover } from './hooks/useDiscover';
 import { useFavorites } from './hooks/useFavorites';
 import { useLibrary } from './hooks/useLibrary';
 import { useSettings } from './hooks/useSettings';
+import { useAppStore } from './store/appStore';
 
 import {
   PlayerProvider,
@@ -44,12 +49,44 @@ import PublicRoute from './routes/PublicRoute';
 
 import { routeToView } from './utils/route';
 import AlbumDetail from './pages/Albums/AlbumDetail';
+import Artists from './pages/Artists/Artists';
+import ArtistDetail from './pages/Artists/ArtistDetail';
+import ManageArtists from './pages/Admin/ManageArtists';
 
 
 function AppRoutes() {
   const routerNavigate = useNavigate();
   const location = useLocation();
   const view = routeToView(location.pathname);
+
+  const initializeApp = useAppStore(
+    (state) => state.initializeApp,
+  );
+
+  const updateTrackCollections = useAppStore(
+    (state) => state.updateTrackCollections,
+  );
+  const addTrackToLibrary = useAppStore(
+  (state) => state.addTrackToLibrary,
+);
+
+  useEffect(() => {
+    initializeApp();
+  }, [initializeApp]);
+
+  useEffect(() => {
+    const content = document.querySelector('.content');
+
+    if (!content) {
+      return;
+    }
+
+    content.scrollTo({
+      top: 0,
+      left: 0,
+      behavior: 'instant',
+    });
+  }, [location.pathname]);
 
   /*
    * Settings owns volume persistence and theme.
@@ -200,8 +237,11 @@ function AppRoutes() {
         setDiscoverQuery={setDiscoverQuery}
         setDiscoverSource={setDiscoverSource}
         clearDiscoverError={clearDiscoverError}
-        libraryTracks={libraryTracks}
+        tracks={tracks}
         setTracks={setTracks}
+        libraryTracks={libraryTracks}
+        addTrackToLibrary={addTrackToLibrary}
+        updateTrackCollections={updateTrackCollections}
         refreshLibrary={refreshLibrary}
         theme={theme}
         setTheme={setTheme}
@@ -251,8 +291,11 @@ function AuthenticatedApp({
   setDiscoverQuery,
   setDiscoverSource,
   clearDiscoverError,
-  libraryTracks,
+  tracks,
   setTracks,
+  libraryTracks, 
+  addTrackToLibrary,
+  updateTrackCollections,
   refreshLibrary,
   theme,
   setTheme,
@@ -268,7 +311,7 @@ function AuthenticatedApp({
     progressMax,
     progressValue,
     setPlaybackError,
-    setIsPlaying,
+    stopPlayback,
     selectTrack,
     playTrackAt,
     togglePlayback,
@@ -279,17 +322,72 @@ function AuthenticatedApp({
     toggleShuffle,
     repeat,
     cycleRepeat,
-    queue,
-    updateQueue,
   } = usePlayer();
+
+  /* =====================================================
+   * RECENTLY PLAYED
+   * ===================================================== */
+
+  const [recentlyPlayedTracks, setRecentlyPlayedTracks] =
+    useState(() => {
+      try {
+        const saved = localStorage.getItem(
+          'recentlyPlayedTracks',
+        );
+
+        if (!saved) {
+          return [];
+        }
+
+        const parsed = JSON.parse(saved);
+
+        return Array.isArray(parsed)
+          ? parsed
+          : [];
+      } catch {
+        return [];
+      }
+    });
+
+  useEffect(() => {
+    if (!activeTrack?.id) {
+      return;
+    }
+
+    setRecentlyPlayedTracks((current) => {
+      const withoutCurrent = current.filter(
+        (track) =>
+          String(track?.id) !==
+          String(activeTrack.id),
+      );
+
+      const updated = [
+        activeTrack,
+        ...withoutCurrent,
+      ].slice(0, 10);
+
+      try {
+        localStorage.setItem(
+          'recentlyPlayedTracks',
+          JSON.stringify(updated),
+        );
+      } catch {
+        // Ignore localStorage errors.
+      }
+
+      return updated;
+    });
+  }, [activeTrack]);
 
   const handleLogout = useCallback(() => {
     /*
-     * Stop the player before logging out.
+     * Stop the actual HTMLAudioElement before logging out.
+     * setIsPlaying(false) only changes React state and does not
+     * stop the persistent audio element by itself.
      */
-    setIsPlaying(false);
+    stopPlayback();
     logout();
-  }, [setIsPlaying, logout]);
+  }, [stopPlayback, logout]);
 
   const admin = useAdmin({
     token,
@@ -320,11 +418,30 @@ function AuthenticatedApp({
       clearDiscoverError();
     }
 
-    navigate(
-      nextView === 'home'
-        ? '/dashboard'
-        : `/${nextView}`,
-    );
+    let targetRoute;
+
+    switch (nextView) {
+      case 'home':
+        targetRoute = '/dashboard';
+        break;
+
+      case 'manage-artists':
+        targetRoute = '/admin/manage-artists';
+        break;
+
+      case 'manage-songs':
+        targetRoute = '/manage-songs';
+        break;
+
+      case 'admin':
+        targetRoute = '/admin';
+        break;
+
+      default:
+        targetRoute = `/${nextView}`;
+    }
+
+    navigate(targetRoute);
   }
 
   function switchToSignup() {
@@ -345,6 +462,17 @@ function AuthenticatedApp({
       logout: handleLogout,
     });
   }
+
+  async function saveToLibrary(trackId) {
+  return saveTrackToLibrary({
+    trackId,
+    token,
+    libraryTracks,
+    addTrackToLibrary,
+    setPlaybackError,
+    logout: handleLogout,
+  });
+}
 
   function renderShell(content) {
     return (
@@ -468,6 +596,7 @@ function AuthenticatedApp({
               onTogglePlayback={togglePlayback}
               featuredTracks={featuredTracks}
               recentlyAddedTracks={recentlyAddedTracks}
+              recentlyPlayedTracks={recentlyPlayedTracks}
               favoriteCount={favoriteTracks.length}
               favoriteIds={favoriteIds}
               onSelectTrack={selectTrack}
@@ -495,6 +624,7 @@ function AuthenticatedApp({
               favoriteIds={favoriteIds}
               onSelectTrack={selectTrack}
               onToggleFavorite={toggleFavorite}
+              onSaveToLibrary={saveToLibrary}
               token={token}
             />,
           )}
@@ -518,6 +648,7 @@ function AuthenticatedApp({
             />,
           )}
         />
+
         <Route
           path="/albums"
           element={renderShell(
@@ -548,6 +679,30 @@ function AuthenticatedApp({
               onTogglePlayback={togglePlayback}
               favoriteIds={favoriteIds}
               onToggleFavorite={toggleFavorite}
+            />,
+          )}
+        />
+
+        <Route
+          path="/artists"
+          element={renderShell(
+            <Artists
+              tracks={libraryTracks}
+              token={token}
+            />,
+          )}
+        />
+
+        <Route
+          path="/artists/:artistKey"
+          element={renderShell(
+            <ArtistDetail
+              tracks={libraryTracks}
+              token={token}
+              activeTrack={activeTrack}
+              isPlaying={isPlaying}
+              onSelectTrack={selectTrack}
+              onTogglePlayback={togglePlayback}
             />,
           )}
         />
@@ -609,15 +764,25 @@ function AuthenticatedApp({
             />,
           )}
         />
+
         <Route
           path="/manage-songs"
           element={renderShell(
             <ManageSongs
               tracks={libraryTracks}
               token={token}
-              onTracksChange={setTracks}
+              onTracksChange={updateTrackCollections}
               onRefresh={refreshLibrary}
             />,
+          )}
+        />
+
+        <Route
+          path="/admin/artists"
+          element={renderShell(
+            <ManageArtists
+              token={token}
+            />
           )}
         />
       </Route>

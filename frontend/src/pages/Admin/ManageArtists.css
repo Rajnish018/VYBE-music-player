@@ -1,0 +1,1541 @@
+/* =====================================================
+   MANAGE ARTISTS PAGE
+===================================================== */
+
+.manage-artists-page {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+/* =====================================================
+   TOOLBAR
+===================================================== */
+
+.manage-artists-toolbar {
+  width: 100%;
+
+  display: flex;
+  align-items: center;
+
+  gap: 12px;
+
+  margin-bottom: 28px;
+}
+
+.manage-artist-search {
+  position: relative;
+
+  flex: 1;
+  min-width: 0;
+
+  height: 44px;
+
+  display: flex;
+  align-items: center;
+
+  gap: 10px;
+
+  padding: 0 14px;
+
+  box-sizing: border-box;
+
+  border-radius: 12px;
+
+  background: rgba(255, 255, 255, 0.035);
+
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.manage-artist-search > svg {
+  width: 17px;
+  height: 17px;
+
+  flex: 0 0 auto;
+
+  opacity: 0.45;
+}
+
+.manage-artist-search input {
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+
+  padding: 0;
+
+  border: 0;
+  outline: 0;
+
+  background: transparent;
+
+  color: inherit;
+
+  font: inherit;
+}
+
+.manage-artist-search input::placeholder {
+  opacity: 0.35;
+}
+
+.manage-artist-search-clear {
+  width: 26px;
+  height: 26px;
+
+  flex: 0 0 26px;
+
+  display: grid;
+  place-items: center;
+
+  padding: 0;
+
+  border: 0;
+  border-radius: 50%;
+
+  background: rgba(255, 255, 255, 0.08);
+
+  color: inherit;
+
+  cursor: pointer;
+}
+
+.manage-artist-search-clear:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+/* =====================================================
+   ADD ARTIST BUTTON
+===================================================== */
+
+.add-artist-trigger {
+  height: 44px;
+
+  flex: 0 0 auto;
+
+  display: inline-flex;
+
+  align-items: center;
+  justify-content: center;
+
+  gap: 8px;
+
+  padding: 0 16px;
+
+  border: 1px solid rgba(255, 255, 255, 0.08);
+
+  border-radius: 12px;
+
+  background: rgba(255, 255, 255, 0.045);
+
+  color: inherit;
+
+  font: inherit;
+
+  font-size: 13px;
+  font-weight: 600;
+
+  cursor: pointer;
+
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease,
+    transform 0.2s ease;
+}
+
+.add-artist-trigger svg {
+  width: 16px;
+  height: 16px;
+}
+
+.add-artist-trigger:hover {
+  background: rgba(255, 255, 255, 0.09);
+
+  border-color: rgba(255, 255, 255, 0.14);
+
+  transform: translateY(-1px);
+}
+
+/* =====================================================
+   ARTIST GRID
+===================================================== */
+
+.manage-artists-grid {
+  display: grid;
+
+  grid-template-columns:
+    repeat(
+      auto-fill,
+      minmax(160px, 1fr)
+    );
+
+  gap: 30px 24px;
+}
+
+/* =====================================================
+   ARTIST CARD
+===================================================== */
+
+.manage-artist-card {
+  min-width: 0;
+
+  display: flex;
+
+  flex-direction: column;
+
+  gap: 12px;
+}
+
+/* =====================================================
+   ARTIST CIRCULAR COVER
+===================================================== */
+
+.manage-artist-cover {
+  position: relative;
+
+  width: 100%;
+
+  aspect-ratio: 1;
+
+  /*
+   * IMPORTANT:
+   * visible is required because the
+   * edit button sits on the edge.
+   */
+  overflow: visible;
+
+  border-radius: 50%;
+}
+
+/*
+ * Actual circular background/shadow.
+ */
+.manage-artist-cover::before {
+  content: '';
+
+  position: absolute;
+
+  inset: 0;
+
+  z-index: 0;
+
+  border-radius: 50%;
+
+  background: rgba(255, 255, 255, 0.04);
+
+  box-shadow:
+    0 10px 35px
+    rgba(0, 0, 0, 0.20);
+
+  pointer-events: none;
+}
+
+/*
+ * Cover image / placeholder.
+ */
+.manage-artist-cover > img,
+.manage-artist-cover > div {
+  position: relative;
+
+  z-index: 1;
+
+  width: 100%;
+  height: 100%;
+
+  display: block;
+
+  border-radius: 50%;
+
+  overflow: hidden;
+}
+
+.manage-artist-cover img {
+  object-fit: cover;
+}
+
+/* =====================================================
+   ARTIST PLACEHOLDER
+===================================================== */
+
+.manage-artist-placeholder {
+  display: grid !important;
+
+  place-items: center;
+
+  background:
+    rgba(255, 255, 255, 0.045);
+
+  color:
+    rgba(255, 255, 255, 0.30);
+}
+
+.manage-artist-placeholder svg {
+  width: 32px;
+  height: 32px;
+}
+
+/* =====================================================
+   EDIT BUTTON
+   BOTTOM-RIGHT OF CIRCLE
+===================================================== */
+
+.manage-artist-edit {
+  position: absolute;
+
+  /*
+   * Bottom-right position
+   */
+  right: 8px;
+  bottom: 8px;
+
+  z-index: 20;
+
+  width: 42px;
+  height: 42px;
+
+  display: grid;
+
+  place-items: center;
+
+  padding: 0;
+
+  border:
+    1px solid
+    rgba(255, 255, 255, 0.20);
+
+  border-radius: 50%;
+
+  background:
+    rgba(0, 0, 0, 0.82);
+
+  color: #fff;
+
+  cursor: pointer;
+
+  /*
+   * Hidden by default
+   */
+  opacity: 0;
+
+  transform:
+    translateY(7px)
+    scale(0.82);
+
+  transition:
+    opacity 0.20s ease,
+    transform 0.20s ease,
+    background 0.20s ease,
+    box-shadow 0.20s ease;
+}
+
+/*
+ * Show Edit button when
+ * hovering the artist image.
+ */
+.manage-artist-cover:hover
+.manage-artist-edit {
+  opacity: 1;
+
+  transform:
+    translateY(0)
+    scale(1);
+}
+
+/*
+ * Keyboard accessibility.
+ */
+.manage-artist-edit:focus-visible {
+  opacity: 1;
+
+  transform:
+    translateY(0)
+    scale(1);
+
+  outline:
+    2px solid
+    #eabf4f;
+
+  outline-offset: 2px;
+}
+
+.manage-artist-edit:hover {
+  background:
+    rgba(0, 0, 0, 0.96);
+
+  box-shadow:
+    0 8px 22px
+    rgba(0, 0, 0, 0.45);
+}
+
+.manage-artist-edit svg {
+  width: 18px;
+  height: 18px;
+}
+
+.manage-artist-edit:disabled {
+  cursor: not-allowed;
+
+  opacity: 0.4;
+}
+
+/* =====================================================
+   ARTIST INFO
+===================================================== */
+.manage-artist-info {
+  min-width: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  text-align: left;
+}
+
+.manage-artist-name {
+  width: 100%;
+  margin: 0;
+  text-align: left;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.manage-artist-meta {
+  width: 100%;
+  margin: 0;
+  text-align: left;
+}
+/* =====================================================
+   LOAD MORE
+===================================================== */
+
+.manage-artists-load-more {
+  min-height: 70px;
+
+  display: flex;
+
+  align-items: center;
+  justify-content: center;
+
+  gap: 10px;
+
+  font-size: 12px;
+
+  opacity: 0.55;
+}
+
+.manage-artists-small-loader {
+  width: 15px;
+  height: 15px;
+
+  border:
+    2px solid
+    rgba(255, 255, 255, 0.15);
+
+  border-top-color:
+    currentColor;
+
+  border-radius: 50%;
+
+  animation:
+    manageArtistsSpin
+    0.8s linear infinite;
+}
+
+@keyframes manageArtistsSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* =====================================================
+   LOADING
+===================================================== */
+
+.manage-artists-loading {
+  min-height: 240px;
+
+  display: flex;
+
+  align-items: center;
+  justify-content: center;
+
+  gap: 12px;
+
+  opacity: 0.6;
+}
+
+.manage-artists-loader {
+  width: 20px;
+  height: 20px;
+
+  border:
+    2px solid
+    rgba(255, 255, 255, 0.12);
+
+  border-top-color:
+    currentColor;
+
+  border-radius: 50%;
+
+  animation:
+    manageArtistsSpin
+    0.8s linear infinite;
+}
+
+/* =====================================================
+   EMPTY STATE
+===================================================== */
+
+.manage-artists-empty {
+  min-height: 300px;
+
+  display: flex;
+
+  flex-direction: column;
+
+  align-items: center;
+  justify-content: center;
+
+  text-align: center;
+
+  opacity: 0.65;
+}
+
+.manage-artists-empty-icon {
+  width: 58px;
+  height: 58px;
+
+  display: grid;
+
+  place-items: center;
+
+  margin-bottom: 16px;
+
+  border-radius: 50%;
+
+  background:
+    rgba(255, 255, 255, 0.05);
+}
+
+.manage-artists-empty-icon svg {
+  width: 25px;
+  height: 25px;
+}
+
+.manage-artists-empty h2 {
+  margin: 0 0 6px;
+
+  font-size: 18px;
+}
+
+.manage-artists-empty p {
+  margin: 0;
+
+  font-size: 13px;
+}
+
+/* =====================================================
+   MESSAGES
+===================================================== */
+
+.manage-artists-message {
+  margin-bottom: 16px;
+
+  padding:
+    12px 14px;
+
+  border-radius: 10px;
+
+  font-size: 13px;
+}
+
+.manage-artists-message.error {
+  background:
+    rgba(255, 70, 70, 0.10);
+
+  border:
+    1px solid
+    rgba(255, 70, 70, 0.20);
+}
+
+.manage-artists-message.success {
+  background:
+    rgba(80, 200, 120, 0.10);
+
+  border:
+    1px solid
+    rgba(80, 200, 120, 0.20);
+}
+
+/* =====================================================
+   MODAL OVERLAY
+===================================================== */
+
+.artist-edit-overlay {
+  position: fixed !important;
+
+  inset: 0 !important;
+
+  z-index: 999999 !important;
+
+  width: 100vw;
+  height: 100dvh;
+
+  display: flex;
+
+  align-items: center;
+  justify-content: center;
+
+  box-sizing: border-box;
+
+  padding: 24px;
+
+  background:
+    rgba(0, 0, 0, 0.78);
+
+  overflow-y: auto;
+
+  overscroll-behavior: contain;
+
+  isolation: isolate;
+
+  animation:
+    artistModalOverlayIn
+    0.18s ease-out;
+}
+
+@keyframes artistModalOverlayIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+/* =====================================================
+   MODAL
+===================================================== */
+
+.artist-edit-modal {
+  position: relative;
+
+  width:
+    min(520px, 100%);
+
+  max-height:
+    calc(100dvh - 48px);
+
+  margin: auto;
+
+  padding: 24px;
+
+  box-sizing: border-box;
+
+  overflow-y: auto;
+
+  border:
+    1px solid
+    rgba(255, 255, 255, 0.12);
+
+  border-radius: 22px;
+
+  background:
+    #171717;
+
+  color:
+    #fff;
+
+  box-shadow:
+    0 30px 100px
+    rgba(0, 0, 0, 0.65);
+
+  scrollbar-width: thin;
+
+  animation:
+    artistModalIn
+    0.22s ease-out;
+}
+
+@keyframes artistModalIn {
+  from {
+    opacity: 0;
+
+    transform:
+      translateY(12px)
+      scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+
+    transform:
+      translateY(0)
+      scale(1);
+  }
+}
+
+/* =====================================================
+   MODAL HEADER
+===================================================== */
+
+.artist-edit-header {
+  display: flex;
+
+  align-items: flex-start;
+
+  justify-content: space-between;
+
+  gap: 16px;
+
+  margin-bottom: 22px;
+}
+
+.artist-edit-header span {
+  display: block;
+
+  margin-bottom: 5px;
+
+  font-size: 11px;
+
+  font-weight: 600;
+
+  text-transform: uppercase;
+
+  letter-spacing: 0.1em;
+
+  color:
+    rgba(255, 255, 255, 0.50);
+}
+
+.artist-edit-header h2 {
+  margin: 0;
+
+  font-size: 24px;
+
+  line-height: 1.2;
+
+  color: #fff;
+}
+
+/* =====================================================
+   MODAL CLOSE BUTTON
+===================================================== */
+
+.artist-edit-close {
+  width: 38px;
+  height: 38px;
+
+  flex: 0 0 38px;
+
+  display: grid;
+
+  place-items: center;
+
+  padding: 0;
+
+  border: 0;
+
+  border-radius: 50%;
+
+  background:
+    rgba(255, 255, 255, 0.08);
+
+  color: #fff;
+
+  font-size: 25px;
+
+  line-height: 1;
+
+  cursor: pointer;
+
+  transition:
+    background 0.2s ease,
+    transform 0.2s ease;
+}
+
+.artist-edit-close:hover {
+  background:
+    rgba(255, 255, 255, 0.15);
+
+  transform:
+    rotate(90deg);
+}
+
+/* =====================================================
+   MODAL CIRCULAR IMAGE
+===================================================== */
+
+.artist-edit-avatar {
+  position: relative;
+
+  width: 128px;
+  height: 128px;
+
+  margin:
+    0 auto 26px;
+
+  overflow: hidden;
+
+  border-radius: 50%;
+
+  background:
+    rgba(255, 255, 255, 0.06);
+
+  border:
+    2px solid
+    rgba(255, 255, 255, 0.10);
+}
+
+.artist-edit-avatar img {
+  width: 100%;
+  height: 100%;
+
+  display: block;
+
+  object-fit: cover;
+}
+
+.artist-edit-avatar-placeholder {
+  width: 100%;
+  height: 100%;
+
+  display: grid;
+
+  place-items: center;
+
+  color:
+    rgba(255, 255, 255, 0.40);
+}
+
+.artist-edit-avatar-placeholder svg {
+  width: 42px;
+  height: 42px;
+}
+
+/* =====================================================
+   MODAL UPLOAD OVERLAY
+===================================================== */
+
+.artist-upload-overlay {
+  position: absolute;
+
+  inset: 0;
+
+  display: flex;
+
+  flex-direction: column;
+
+  align-items: center;
+  justify-content: center;
+
+  gap: 5px;
+
+  background:
+    rgba(0, 0, 0, 0.62);
+
+  color: #fff;
+
+  cursor: pointer;
+
+  opacity: 0;
+
+  transition:
+    opacity 0.2s ease;
+}
+
+.artist-edit-avatar:hover
+.artist-upload-overlay {
+  opacity: 1;
+}
+
+.artist-upload-overlay svg {
+  width: 22px;
+  height: 22px;
+}
+
+.artist-upload-overlay span {
+  font-size: 12px;
+
+  font-weight: 600;
+}
+
+.artist-upload-overlay:focus-visible {
+  opacity: 1;
+
+  outline:
+    2px solid
+    #eabf4f;
+
+  outline-offset: -4px;
+}
+
+/* =====================================================
+   MODAL LABELS
+===================================================== */
+
+.artist-edit-modal > label {
+  display: block;
+
+  margin:
+    16px 0 7px;
+
+  font-size: 13px;
+
+  font-weight: 600;
+
+  color:
+    rgba(255, 255, 255, 0.75);
+}
+
+/* =====================================================
+   MODAL INPUT
+===================================================== */
+
+.artist-edit-modal > input {
+  width: 100%;
+
+  min-height: 46px;
+
+  padding:
+    0 14px;
+
+  box-sizing: border-box;
+
+  border:
+    1px solid
+    rgba(255, 255, 255, 0.12);
+
+  border-radius: 10px;
+
+  outline: none;
+
+  background:
+    rgba(255, 255, 255, 0.055);
+
+  color: #fff;
+
+  font: inherit;
+
+  transition:
+    border-color 0.2s ease,
+    background 0.2s ease;
+}
+
+.artist-edit-modal > input::placeholder {
+  color:
+    rgba(255, 255, 255, 0.35);
+}
+
+.artist-edit-modal > input:focus {
+  border-color:
+    rgba(255, 255, 255, 0.30);
+
+  background:
+    rgba(255, 255, 255, 0.08);
+}
+
+/* =====================================================
+   MODAL DESCRIPTION
+===================================================== */
+
+.artist-edit-modal > textarea {
+  width: 100%;
+
+  min-height: 120px;
+
+  padding:
+    12px 14px;
+
+  box-sizing: border-box;
+
+  resize: vertical;
+
+  border:
+    1px solid
+    rgba(255, 255, 255, 0.12);
+
+  border-radius: 10px;
+
+  outline: none;
+
+  background:
+    rgba(255, 255, 255, 0.055);
+
+  color: #fff;
+
+  font: inherit;
+
+  line-height: 1.5;
+
+  transition:
+    border-color 0.2s ease,
+    background 0.2s ease;
+}
+
+.artist-edit-modal > textarea::placeholder {
+  color:
+    rgba(255, 255, 255, 0.35);
+}
+
+.artist-edit-modal > textarea:focus {
+  border-color:
+    rgba(255, 255, 255, 0.30);
+
+  background:
+    rgba(255, 255, 255, 0.08);
+}
+
+/* =====================================================
+   MODAL ACTIONS
+===================================================== */
+
+.artist-edit-actions {
+  display: flex;
+
+  justify-content: flex-end;
+
+  gap: 10px;
+
+  margin-top: 24px;
+}
+
+.artist-edit-cancel,
+.artist-edit-save {
+  min-height: 44px;
+
+  padding:
+    0 18px;
+
+  border-radius: 10px;
+
+  font: inherit;
+
+  font-weight: 600;
+
+  cursor: pointer;
+
+  transition:
+    transform 0.15s ease,
+    opacity 0.15s ease,
+    background 0.15s ease;
+}
+
+.artist-edit-cancel {
+  border:
+    1px solid
+    rgba(255, 255, 255, 0.12);
+
+  background:
+    rgba(255, 255, 255, 0.06);
+
+  color: #fff;
+}
+
+.artist-edit-save {
+  border: 0;
+
+  background:
+    #eabf4f;
+
+  color:
+    #111;
+}
+
+.artist-edit-cancel:hover,
+.artist-edit-save:hover {
+  transform:
+    translateY(-1px);
+}
+
+.artist-edit-save:hover {
+  filter:
+    brightness(1.05);
+}
+
+.artist-edit-cancel:disabled,
+.artist-edit-save:disabled {
+  opacity: 0.5;
+
+  cursor: not-allowed;
+
+  transform: none;
+}
+
+/* =====================================================
+   TABLET
+===================================================== */
+
+@media (max-width: 900px) {
+  .manage-artists-grid {
+    grid-template-columns:
+      repeat(
+        auto-fill,
+        minmax(140px, 1fr)
+      );
+
+    gap:
+      26px 18px;
+  }
+
+  .artist-edit-overlay {
+    padding: 18px;
+  }
+
+  .artist-edit-modal {
+    max-height:
+      calc(100dvh - 36px);
+  }
+}
+
+/* =====================================================
+   MOBILE
+===================================================== */
+
+@media (max-width: 640px) {
+  .manage-artists-toolbar {
+    flex-direction: column;
+
+    align-items: stretch;
+
+    gap: 10px;
+  }
+
+  .manage-artist-search {
+    width: 100%;
+  }
+
+  .add-artist-trigger {
+    width: 100%;
+  }
+
+  .manage-artists-grid {
+    grid-template-columns:
+      repeat(2, minmax(0, 1fr));
+
+    gap:
+      24px 16px;
+  }
+
+  /* Bottom-right edit button */
+  .manage-artist-edit {
+    right: 5px;
+    bottom: 5px;
+
+    width: 36px;
+    height: 36px;
+  }
+
+  .manage-artist-edit svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .artist-edit-overlay {
+    padding: 12px;
+  }
+
+  .artist-edit-modal {
+    width: 100%;
+
+    max-height:
+      calc(100dvh - 24px);
+
+    padding: 20px;
+
+    border-radius: 20px;
+  }
+
+  .artist-edit-header h2 {
+    font-size: 21px;
+  }
+
+  .artist-edit-avatar {
+    width: 104px;
+    height: 104px;
+  }
+
+  .artist-edit-actions {
+    display: grid;
+
+    grid-template-columns:
+      1fr 1fr;
+
+    gap: 8px;
+  }
+
+  .artist-edit-cancel,
+  .artist-edit-save {
+    width: 100%;
+  }
+}
+
+/* =====================================================
+   SMALL MOBILE
+===================================================== */
+
+@media (max-width: 400px) {
+  .manage-artists-grid {
+    gap:
+      22px 12px;
+  }
+
+  .manage-artist-edit {
+    right: 4px;
+    bottom: 4px;
+
+    width: 33px;
+    height: 33px;
+  }
+
+  .manage-artist-edit svg {
+    width: 15px;
+    height: 15px;
+  }
+
+  .manage-artist-info strong {
+    font-size: 13px;
+  }
+
+  .manage-artist-info span {
+    font-size: 11px;
+  }
+
+  .artist-edit-overlay {
+    padding: 8px;
+  }
+
+  .artist-edit-modal {
+    max-height:
+      calc(100dvh - 16px);
+
+    padding: 16px;
+
+    border-radius: 18px;
+  }
+
+  .artist-edit-avatar {
+    width: 90px;
+    height: 90px;
+  }
+
+  .artist-edit-actions {
+    grid-template-columns:
+      1fr;
+  }
+}
+
+/* =====================================================
+   REDUCED MOTION
+===================================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  .manage-artist-edit,
+  .add-artist-trigger,
+  .artist-edit-modal,
+  .artist-edit-overlay,
+  .artist-edit-close,
+  .artist-edit-cancel,
+  .artist-edit-save {
+    animation: none;
+
+    transition: none;
+  }
+}  
+
+/* =====================================================
+   ARTIST CARD
+   CLICKABLE
+===================================================== */
+
+.manage-artist-card {
+  cursor: pointer;
+  outline: none;
+}
+
+.manage-artist-card:focus-visible {
+  border-radius: 16px;
+  outline: 2px solid #eabf4f;
+  outline-offset: 5px;
+}
+
+
+/* =====================================================
+   DELETE BUTTON
+   BOTTOM-LEFT OF CIRCLE
+===================================================== */
+
+.manage-artist-delete {
+  position: absolute;
+
+  left: 8px;
+  bottom: 8px;
+
+  z-index: 20;
+
+  width: 42px;
+  height: 42px;
+
+  display: grid;
+  place-items: center;
+
+  padding: 0;
+
+  border: 1px solid
+    rgba(255, 255, 255, 0.20);
+
+  border-radius: 50%;
+
+  background:
+    rgba(0, 0, 0, 0.82);
+
+  color: #fff;
+
+  cursor: pointer;
+
+  opacity: 0;
+
+  transform:
+    translateY(7px)
+    scale(0.82);
+
+  transition:
+    opacity 0.20s ease,
+    transform 0.20s ease,
+    background 0.20s ease,
+    box-shadow 0.20s ease;
+}
+
+
+/* Show Delete on hover */
+
+.manage-artist-cover:hover
+.manage-artist-delete {
+  opacity: 1;
+
+  transform:
+    translateY(0)
+    scale(1);
+}
+
+
+/* Hover */
+
+.manage-artist-delete:hover {
+  background:
+    rgba(190, 40, 40, 0.95);
+
+  box-shadow:
+    0 8px 22px
+    rgba(0, 0, 0, 0.45);
+}
+
+
+/* Keyboard */
+
+.manage-artist-delete:focus-visible {
+  opacity: 1;
+
+  transform:
+    translateY(0)
+    scale(1);
+
+  outline:
+    2px solid
+    #eabf4f;
+
+  outline-offset: 2px;
+}
+
+
+/* Disabled */
+
+.manage-artist-delete:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+
+/* Icon */
+
+.manage-artist-delete svg {
+  width: 18px;
+  height: 18px;
+}
+
+
+/* =====================================================
+   MOBILE
+===================================================== */
+
+@media (max-width: 640px) {
+
+  .manage-artist-delete {
+    left: 5px;
+    bottom: 5px;
+
+    width: 36px;
+    height: 36px;
+  }
+
+  .manage-artist-delete svg {
+    width: 16px;
+    height: 16px;
+  }
+
+}
+
+
+@media (max-width: 400px) {
+
+  .manage-artist-delete {
+    left: 4px;
+    bottom: 4px;
+
+    width: 33px;
+    height: 33px;
+  }
+
+  .manage-artist-delete svg {
+    width: 15px;
+    height: 15px;
+  }
+
+}
+.artist-delete-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: rgba(0, 0, 0, 0.72);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+}
+
+.artist-delete-modal {
+    width: min(440px, 100%);
+    padding: 28px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 22px;
+    background: #171717;
+    box-shadow:
+        0 30px 80px rgba(0, 0, 0, 0.55),
+        0 10px 30px rgba(0, 0, 0, 0.3);
+}
+
+.artist-delete-icon {
+    width: 54px;
+    height: 54px;
+    display: grid;
+    place-items: center;
+    margin-bottom: 20px;
+    border-radius: 50%;
+    background: rgba(190, 40, 40, 0.14);
+    color: #e05252;
+}
+
+.artist-delete-icon svg {
+    width: 24px;
+    height: 24px;
+}
+
+.artist-delete-content {
+    text-align: left;
+}
+
+.artist-delete-eyebrow {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #999;
+}
+
+.artist-delete-content h2 {
+    margin: 0;
+    color: #fff;
+    font-size: 22px;
+    line-height: 1.3;
+}
+
+.artist-delete-content p {
+    margin: 12px 0 0;
+    color: #a7a7a7;
+    font-size: 14px;
+    line-height: 1.6;
+}
+
+.artist-delete-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 28px;
+}
+
+.artist-delete-cancel,
+.artist-delete-confirm {
+    min-height: 42px;
+    padding: 0 18px;
+    border-radius: 10px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    transition:
+        background 0.2s ease,
+        transform 0.2s ease,
+        opacity 0.2s ease;
+}
+
+.artist-delete-cancel {
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.05);
+    color: #fff;
+}
+
+.artist-delete-cancel:hover {
+    background: rgba(255, 255, 255, 0.09);
+}
+
+.artist-delete-confirm {
+    border: 1px solid rgba(220, 70, 70, 0.5);
+    background: #b52f2f;
+    color: #fff;
+}
+
+.artist-delete-confirm:hover {
+    background: #c63838;
+    transform: translateY(-1px);
+}
+
+.artist-delete-cancel:disabled,
+.artist-delete-confirm:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
+@media (max-width: 520px) {
+    .artist-delete-overlay {
+        padding: 16px;
+    }
+
+    .artist-delete-modal {
+        padding: 22px;
+        border-radius: 18px;
+    }
+
+    .artist-delete-actions {
+        flex-direction: column-reverse;
+    }
+
+    .artist-delete-cancel,
+    .artist-delete-confirm {
+        width: 100%;
+    }
+}

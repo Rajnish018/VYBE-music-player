@@ -970,3 +970,137 @@
     transition-duration: 0.01ms !important;
   }
 }
+/* =========================================================
+   PROGRESS TRACK WRAPPER
+========================================================= */
+
+.progress-track-wrapper {
+  position: relative;
+
+  flex: 1;
+  min-width: 0;
+
+  display: flex;
+  align-items: center;
+}
+
+
+/* =========================================================
+   LOADING LINE
+========================================================= */
+
+.player-loading-line {
+  position: absolute;
+
+  left: 0;
+  top: 50%;
+
+  z-index: 2;
+
+  width: 20%;
+  height: 3px;
+
+  border-radius: 999px;
+
+  background: var(
+    --accent,
+    #e0b354
+  );
+
+  transform: translateY(-50%);
+
+  animation:
+    player-loading-slide
+    1.2s
+    ease-in-out
+    infinite;
+
+  pointer-events: none;
+}
+
+
+/* =========================================================
+   LOADING ANIMATION
+========================================================= */
+
+@keyframes player-loading-slide {
+  0% {
+    left: 0;
+    width: 15%;
+  }
+
+  50% {
+    left: 42%;
+    width: 28%;
+  }
+
+  100% {
+    left: 85%;
+    width: 15%;
+  }
+}
+
+
+/* =========================================================
+   PLAY BUTTON WHILE LOADING
+========================================================= */
+
+.primary-control-loading {
+  position: relative;
+}
+
+
+/*
+   Very subtle indication that the track is loading.
+   The actual Play/Pause icon remains visible.
+*/
+
+.primary-control-loading::after {
+  content: '';
+
+  position: absolute;
+
+  inset: -3px;
+
+  border-radius: 50%;
+
+  border: 2px solid
+    transparent;
+
+  border-top-color:
+    var(--accent, #e0b354);
+
+  animation:
+    player-loading-ring
+    1s
+    linear
+    infinite;
+
+  pointer-events: none;
+}
+
+
+@keyframes player-loading-ring {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+
+/* =========================================================
+   LOADING PROGRESS
+========================================================= */
+
+.progress-row-loading {
+  position: relative;
+}
+
+
+.progress-row-loading
+.progress-slider {
+  opacity: 0.85;
+}

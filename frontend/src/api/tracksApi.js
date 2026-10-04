@@ -19,6 +19,32 @@ export const tracksApi = {
     return asArray(data?.tracks);
   },
 
+  async getLibrary(token, signal) {
+    const data = await request(
+      '/api/tracks/library',
+      { signal },
+      token,
+    );
+
+    if (Array.isArray(data)) {
+      return data;
+    }
+
+    return asArray(data?.tracks);
+  },
+
+  async saveToLibrary(trackId, token, signal) {
+    const data = await request(
+      `/api/tracks/${encodeURIComponent(trackId)}/save`,
+      {
+        method: 'POST',
+        signal,
+      },
+      token,
+    );
+
+    return data;
+  },
   async search(
     query,
     token,
@@ -41,8 +67,7 @@ export const tracksApi = {
     const queryString = params.toString();
 
     const data = await request(
-      `/api/tracks/search${
-        queryString ? `?${queryString}` : ''
+      `/api/tracks/search${queryString ? `?${queryString}` : ''
       }`,
       {
         signal,
@@ -55,5 +80,28 @@ export const tracksApi = {
     }
 
     return asArray(data?.tracks);
+  },
+  async saveYouTube(
+    youtubeId,
+    token,
+    signal,
+  ) {
+    const data =
+      await request(
+        '/api/tracks/youtube/save',
+        {
+          method: 'POST',
+
+          signal,
+
+          body:
+            JSON.stringify({
+              youtubeId,
+            }),
+        },
+        token,
+      );
+
+    return data;
   },
 };

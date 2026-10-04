@@ -151,6 +151,19 @@ function Icon({ name }) {
       </>
     ),
     minus: <path d="M5 12h14" />,
+    edit: (
+  <>
+    <path d="M12 20h9" />
+    <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z" />
+  </>
+),
+download: (
+  <>
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    <path d="m7 10 5 5 5-5" />
+    <path d="M12 15V3" />
+  </>
+),
   };
 
   return (

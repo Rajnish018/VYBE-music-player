@@ -1,4 +1,39 @@
 import { favoritesApi } from '../api';
+import { useAppStore } from '../store/appStore';
+
+function findTrack(trackId) {
+  const { libraryTracks, tracks } =
+    useAppStore.getState();
+
+  return (
+    libraryTracks.find(
+      (track) => track.id === trackId,
+    ) ||
+    tracks.find(
+      (track) => track.id === trackId,
+    ) ||
+    null
+  );
+}
+
+function setPending(trackId, pending) {
+  useAppStore.setState((state) => {
+    const pendingFavoriteTrackIds =
+      new Set(
+        state.pendingFavoriteTrackIds,
+      );
+
+    if (pending) {
+      pendingFavoriteTrackIds.add(trackId);
+    } else {
+      pendingFavoriteTrackIds.delete(trackId);
+    }
+
+    return {
+      pendingFavoriteTrackIds,
+    };
+  });
+}
 
 export async function toggleFavorite({
   trackId,
@@ -8,17 +43,97 @@ export async function toggleFavorite({
   setPlaybackError,
   logout,
 }) {
+  const {
+    pendingFavoriteTrackIds,
+    favoriteTracks,
+  } = useAppStore.getState();
+
+  if (
+    pendingFavoriteTrackIds.has(trackId)
+  ) {
+    return;
+  }
+
+  const wasFavorite =
+    favoriteIds.has(trackId);
+
+  const previousFavorites =
+    favoriteTracks;
+
+  setPending(trackId, true);
+
   try {
-    if (favoriteIds.has(trackId)) {
-      await favoritesApi.remove(trackId, token);
-      setFavoriteTracks((current) => current.filter((track) => track.id !== trackId));
+    if (wasFavorite) {
+      setFavoriteTracks((current) =>
+        current.filter(
+          (track) => track.id !== trackId,
+        ),
+      );
+
+      await favoritesApi.remove(
+        trackId,
+        token,
+      );
+
       return;
     }
 
-    const { track } = await favoritesApi.add(trackId, token);
-    setFavoriteTracks((current) => [track, ...current]);
+    const optimisticTrack =
+      findTrack(trackId);
+
+    if (optimisticTrack) {
+      setFavoriteTracks((current) => {
+        if (
+          current.some(
+            (track) =>
+              track.id === trackId,
+          )
+        ) {
+          return current;
+        }
+
+        return [
+          optimisticTrack,
+          ...current,
+        ];
+      });
+    }
+
+    const { track } =
+      await favoritesApi.add(
+        trackId,
+        token,
+      );
+
+    if (track) {
+      setFavoriteTracks((current) => {
+        const withoutTrack =
+          current.filter(
+            (item) =>
+              item.id !== trackId,
+          );
+
+        return [
+          track,
+          ...withoutTrack,
+        ];
+      });
+    }
   } catch (error) {
-    if (error.status === 401) logout();
-    setPlaybackError(error.message || 'Could not update favorites.');
+    setFavoriteTracks(
+      previousFavorites,
+    );
+
+    if (error.status === 401) {
+      logout();
+      return;
+    }
+
+    setPlaybackError(
+      error.message ||
+        'Could not update favorites.',
+    );
+  } finally {
+    setPending(trackId, false);
   }
 }

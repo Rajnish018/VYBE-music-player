@@ -1,6 +1,6 @@
 /* =========================================================
    HERO
-   ========================================================= */
+========================================================= */
 
 .hero-panel {
   position: relative;
@@ -50,7 +50,7 @@
 
 /* =========================================================
    HERO BACKGROUND GLOW
-   ========================================================= */
+========================================================= */
 
 .hero-panel::before {
   position: absolute;
@@ -76,8 +76,8 @@
 
 
 /* =========================================================
-   COVER
-   ========================================================= */
+   HERO COVER
+========================================================= */
 
 .hero-cover-wrapper {
   position: relative;
@@ -118,7 +118,7 @@
 
 /* =========================================================
    HERO COPY
-   ========================================================= */
+========================================================= */
 
 .hero-copy {
   position: relative;
@@ -183,9 +183,8 @@
 
 
 /* =========================================================
-   PLAY / PAUSE BUTTON
-   BOTTOM-RIGHT OF HERO
-   ========================================================= */
+   HERO PLAY / PAUSE BUTTON
+========================================================= */
 
 .hero-play {
   position: absolute;
@@ -272,8 +271,8 @@
 
 
 /* =========================================================
-   TABLET
-   ========================================================= */
+   HERO TABLET
+========================================================= */
 
 @media (max-width: 980px) {
   .hero-panel {
@@ -310,8 +309,8 @@
 
 
 /* =========================================================
-   MOBILE
-   ========================================================= */
+   HERO MOBILE
+========================================================= */
 
 @media (max-width: 760px) {
   .hero-panel {
@@ -370,8 +369,8 @@
 
 
 /* =========================================================
-   SMALL MOBILE
-   ========================================================= */
+   HERO SMALL MOBILE
+========================================================= */
 
 @media (max-width: 520px) {
   .hero-panel {
@@ -405,5 +404,1174 @@
     width: 52px;
 
     height: 52px;
+  }
+}
+
+
+/* =========================================================
+   JUMP BACK IN
+========================================================= */
+
+.jump-back-section {
+  width: 100%;
+
+  margin-top: 30px;
+
+  min-width: 0;
+}
+
+.jump-back-header {
+  display: flex;
+
+  align-items: center;
+
+  justify-content: space-between;
+
+  gap: 16px;
+
+  margin-bottom: 14px;
+}
+
+.jump-back-header h2 {
+  margin: 0;
+
+  color: var(--text-primary, #fff);
+
+  font-size: 25px;
+
+  font-weight: 700;
+
+  line-height: 1.15;
+}
+
+.jump-back-show-all {
+  flex: 0 0 auto;
+
+  border: 0;
+
+  background: transparent;
+
+  color: var(--text-secondary, #aaa);
+
+  font-size: 14px;
+
+  font-weight: 600;
+
+  cursor: pointer;
+
+  transition:
+    color 0.2s ease,
+    transform 0.2s ease;
+}
+
+.jump-back-show-all:hover {
+  color: var(--text-primary, #fff);
+}
+
+.jump-back-show-all:active {
+  transform: scale(0.97);
+}
+
+
+/* =========================================================
+   RECENTLY PLAYED LIST
+========================================================= */
+
+.jump-back-list {
+  display: grid;
+
+  grid-auto-flow: column;
+
+  grid-auto-columns:
+    calc(
+      (100% - 70px) / 6
+    );
+
+  gap: 14px;
+
+  width: 100%;
+
+  overflow-x: auto;
+
+  overflow-y: hidden;
+
+  padding: 2px 0 10px;
+
+  scrollbar-width: none;
+}
+
+.jump-back-list::-webkit-scrollbar {
+  display: none;
+}
+
+
+/* Smaller desktop */
+
+@media (max-width: 1200px) {
+  .jump-back-list {
+    grid-auto-columns:
+      calc(
+        (100% - 56px) / 5
+      );
+  }
+}
+
+
+/* Tablet */
+
+@media (max-width: 900px) {
+  .jump-back-list {
+    grid-auto-columns:
+      calc(
+        (100% - 42px) / 4
+      );
+  }
+}
+
+
+/* Small tablet */
+
+@media (max-width: 700px) {
+  .jump-back-list {
+    grid-auto-columns:
+      calc(
+        (100% - 28px) / 3
+      );
+  }
+}
+
+
+/* Mobile */
+
+@media (max-width: 500px) {
+  .jump-back-list {
+    grid-auto-columns:
+      calc(
+        (100% - 10px) / 2
+      );
+
+    gap: 10px;
+  }
+}
+
+
+/* =========================================================
+   JUMP BACK CARD
+========================================================= */
+
+.jump-back-card {
+  min-width: 0;
+
+  display: block;
+
+  padding: 12px;
+
+  border: 1px solid transparent;
+
+  border-radius: 8px;
+
+  background: transparent;
+
+  color: inherit;
+
+  text-align: left;
+
+  cursor: pointer;
+
+  scroll-snap-align: start;
+
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease,
+    transform 0.2s ease;
+}
+
+.jump-back-card:hover {
+  background: rgba(255, 255, 255, 0.06);
+
+  border-color: rgba(255, 255, 255, 0.04);
+}
+
+.jump-back-card-active {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+
+/* =========================================================
+   JUMP BACK COVER
+========================================================= */
+
+.jump-back-cover {
+  position: relative;
+
+  width: 100%;
+
+  aspect-ratio: 1 / 1;
+
+  overflow: hidden;
+
+  border-radius: 7px;
+
+  background:
+    var(
+      --surface,
+      #1c1c1c
+    );
+
+  box-shadow:
+    0 8px 22px
+    rgba(0, 0, 0, 0.25);
+}
+
+.jump-back-cover img {
+  width: 100%;
+
+  height: 100%;
+
+  display: block;
+
+  object-fit: cover;
+
+  transition:
+    transform 0.25s ease,
+    filter 0.25s ease;
+}
+
+.jump-back-card:hover
+.jump-back-cover img {
+  transform: scale(1.025);
+
+  filter: brightness(0.82);
+}
+
+
+/* =========================================================
+   JUMP BACK PLAY BUTTON
+========================================================= */
+
+.jump-back-play {
+  position: absolute;
+
+  right: 10px;
+
+  bottom: 10px;
+
+  width: 46px;
+
+  height: 46px;
+
+  display: flex;
+
+  align-items: center;
+
+  justify-content: center;
+
+  border-radius: 50%;
+
+  background: #e0b354;
+
+  color: #000;
+
+  opacity: 0;
+
+  transform:
+    translateY(8px)
+    scale(0.92);
+
+  box-shadow:
+    0 6px 16px
+    rgba(0, 0, 0, 0.35);
+
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
+}
+
+.jump-back-play svg {
+  width: 20px;
+
+  height: 20px;
+}
+
+.jump-back-card:hover
+.jump-back-play,
+.jump-back-card-active
+.jump-back-play {
+  opacity: 1;
+
+  transform:
+    translateY(0)
+    scale(1);
+}
+
+
+/* =========================================================
+   SONG INFO
+========================================================= */
+
+.jump-back-info {
+  min-width: 0;
+
+  display: flex;
+
+  flex-direction: column;
+
+  gap: 5px;
+
+  padding-top: 11px;
+}
+
+.jump-back-info strong {
+  display: block;
+
+  overflow: hidden;
+
+  color: var(--text-primary, #fff);
+
+  font-size: 15px;
+
+  font-weight: 500;
+
+  line-height: 1.35;
+
+  white-space: nowrap;
+
+  text-overflow: ellipsis;
+}
+
+.jump-back-info span {
+  display: block;
+
+  overflow: hidden;
+
+  color: var(--text-secondary, #aaa);
+
+  font-size: 13px;
+
+  line-height: 1.3;
+
+  white-space: nowrap;
+
+  text-overflow: ellipsis;
+}
+
+
+/* =========================================================
+   EMPTY STATE
+========================================================= */
+
+.jump-back-empty {
+  min-height: 110px;
+
+  display: flex;
+
+  align-items: center;
+
+  justify-content: center;
+
+  gap: 10px;
+
+  padding: 24px;
+
+  border: 1px solid
+    var(
+      --border-color,
+      rgba(255, 255, 255, 0.08)
+    );
+
+  border-radius: 10px;
+
+  background:
+    var(
+      --surface,
+      rgba(255, 255, 255, 0.025)
+    );
+
+  color: var(--text-muted, #777);
+
+  font-size: 13px;
+}
+
+.jump-back-empty svg {
+  width: 20px;
+
+  height: 20px;
+}
+
+
+/* =========================================================
+   JUMP BACK RESPONSIVE
+========================================================= */
+
+@media (max-width: 720px) {
+  .jump-back-section {
+    margin-top: 24px;
+  }
+
+  .jump-back-header {
+    margin-bottom: 12px;
+  }
+
+  .jump-back-header h2 {
+    font-size: 21px;
+  }
+
+  .jump-back-show-all {
+    font-size: 13px;
+  }
+
+  .jump-back-list {
+    grid-auto-columns: 160px;
+
+    gap: 10px;
+  }
+
+  .jump-back-card {
+    padding: 9px;
+  }
+
+  .jump-back-play {
+    width: 40px;
+
+    height: 40px;
+
+    right: 8px;
+
+    bottom: 8px;
+  }
+
+  .jump-back-play svg {
+    width: 17px;
+
+    height: 17px;
+  }
+}
+
+@media (max-width: 480px) {
+  .jump-back-header h2 {
+    font-size: 19px;
+  }
+
+  .jump-back-list {
+    grid-auto-columns: 145px;
+  }
+
+  .jump-back-info strong {
+    font-size: 14px;
+  }
+
+  .jump-back-info span {
+    font-size: 12px;
+  }
+}
+
+
+/* =========================================================
+   POPULAR ARTISTS
+========================================================= */
+
+.popular-artists-section {
+  width: 100%;
+
+  margin-top: 34px;
+
+  margin-bottom: 34px;
+}
+
+.popular-artists-header {
+  display: flex;
+
+  align-items: center;
+
+  justify-content: space-between;
+
+  margin-bottom: 18px;
+}
+
+.popular-artists-header h2 {
+  margin: 0;
+
+  color: var(
+    --text-primary,
+    #fff
+  );
+
+  font-size: 24px;
+
+  font-weight: 700;
+
+  line-height: 1.2;
+}
+
+.popular-artists-show-all {
+  border: 0;
+
+  padding: 4px 0;
+
+  background: transparent;
+
+  color: var(
+    --text-secondary,
+    #aaa
+  );
+
+  font-size: 13px;
+
+  font-weight: 600;
+
+  cursor: pointer;
+
+  transition:
+    color 0.2s ease,
+    transform 0.2s ease;
+}
+
+.popular-artists-show-all:hover {
+  color: var(
+    --text-primary,
+    #fff
+  );
+}
+
+
+/* =========================================================
+   HORIZONTAL ARTIST LIST
+========================================================= */
+
+.popular-artists-list {
+  display: grid;
+
+  grid-auto-flow: column;
+
+  grid-auto-columns:
+    calc(
+      (100% - 70px) / 6
+    );
+
+  gap: 14px;
+
+  width: 100%;
+
+  overflow-x: auto;
+
+  overflow-y: hidden;
+
+  padding: 2px 0 8px;
+
+  scrollbar-width: none;
+}
+
+.popular-artists-list::-webkit-scrollbar {
+  display: none;
+}
+
+
+/* =========================================================
+   ARTIST CARD
+========================================================= */
+
+.popular-artist-card {
+  display: block;
+
+  min-width: 0;
+
+  padding: 8px;
+
+  border: 0;
+
+  border-radius: 8px;
+
+  background: transparent;
+
+  color: inherit;
+
+  text-align: center;
+
+  cursor: pointer;
+
+  transition:
+    background 0.2s ease,
+    transform 0.2s ease;
+}
+
+.popular-artist-card:hover {
+  background:
+    rgba(255, 255, 255, 0.055);
+
+  transform: translateY(-2px);
+}
+
+.popular-artist-card:focus-visible {
+  outline: 2px solid
+    var(
+      --accent,
+      #e0b354
+    );
+
+  outline-offset: 2px;
+}
+
+
+.popular-artist-info {
+  width: 100%;
+  min-width: 0;
+  margin-top: 10px;
+  text-align: center;
+}
+
+.popular-artist-info strong {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+
+  color: var(--text-primary, #fff);
+
+  font-size: 14px;
+  font-weight: 600;
+
+  line-height: 1.3;
+  text-align: center;
+
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+
+/* =========================================================
+   CIRCULAR ARTIST IMAGE
+========================================================= */
+
+.popular-artist-image {
+  position: relative;
+
+  width: 100%;
+  aspect-ratio: 1 / 1;
+
+  /* IMPORTANT:
+     allow play button to sit above the circle */
+  overflow: visible;
+
+  border-radius: 50%;
+
+  background: var(--surface, #222);
+
+  box-shadow:
+    0 5px 18px rgba(0, 0, 0, 0.22);
+}
+
+.popular-artist-image img {
+  display: block;
+
+  width: 100%;
+  height: 100%;
+
+  object-fit: cover;
+
+  border-radius: 50%;
+
+  transition:
+    transform 0.25s ease;
+}
+
+.popular-artist-card:hover
+.popular-artist-image img {
+  transform: scale(1.05);
+}
+
+
+/* =========================================================
+   PLACEHOLDER
+========================================================= */
+
+.popular-artist-placeholder {
+  width: 100%;
+  height: 100%;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  border-radius: 50%;
+
+  background:
+    linear-gradient(
+      145deg,
+      rgba(255, 255, 255, 0.10),
+      rgba(255, 255, 255, 0.025)
+    );
+
+  color: var(--text-muted, #777);
+}
+
+.popular-artist-placeholder svg {
+  width: 34px;
+  height: 34px;
+}
+
+
+/* =========================================================
+   POPULAR ARTIST PLAY BUTTON
+   SAME STYLE AS ARTISTS PAGE
+========================================================= */
+
+.popular-artist-play {
+  position: absolute;
+
+  z-index: 50;
+
+  /* Move the button slightly OUT of the circle */
+  right: 2px;
+  bottom: -8px;
+
+  width: 54px;
+  height: 54px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  padding: 0;
+
+  border: 0;
+  border-radius: 50%;
+
+  background: var(--accent, #e0b354);
+
+  color: var(--accent-contrast, #111);
+
+  box-shadow:
+    0 8px 22px rgba(0, 0, 0, 0.48);
+
+  opacity: 0;
+
+  transform:
+    translateY(8px)
+    scale(0.90);
+
+  pointer-events: none;
+
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
+}
+
+.popular-artist-card:hover
+.popular-artist-play,
+.popular-artist-card:focus-visible
+.popular-artist-play {
+  opacity: 1;
+
+  transform:
+    translateY(0)
+    scale(1);
+
+  pointer-events: auto;
+}
+
+.popular-artist-play svg {
+  display: block;
+
+  width: 24px;
+  height: 24px;
+}
+
+
+/* =========================================================
+   RESPONSIVE PLAY BUTTON
+========================================================= */
+
+@media (max-width: 900px) {
+  .popular-artist-play {
+    width: 48px;
+    height: 48px;
+
+    right: 2px;
+    bottom: -7px;
+  }
+
+  .popular-artist-play svg {
+    width: 21px;
+    height: 21px;
+  }
+}
+
+
+@media (max-width: 720px) {
+  .popular-artist-play {
+    width: 44px;
+    height: 44px;
+
+    right: 1px;
+    bottom: -6px;
+  }
+
+  .popular-artist-play svg {
+    width: 20px;
+    height: 20px;
+  }
+}
+
+
+@media (max-width: 500px) {
+  .popular-artist-play {
+    width: 40px;
+    height: 40px;
+
+    right: 1px;
+    bottom: -5px;
+  }
+
+  .popular-artist-play svg {
+    width: 18px;
+    height: 18px;
+  }
+}
+
+
+@media (max-width: 340px) {
+  .popular-artist-play {
+    width: 36px;
+    height: 36px;
+
+    right: 0;
+    bottom: -4px;
+  }
+
+  .popular-artist-play svg {
+    width: 16px;
+    height: 16px;
+  }
+}
+
+/* =========================================================
+   REDUCED MOTION
+========================================================= */
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-play,
+  .jump-back-card,
+  .jump-back-cover img,
+  .jump-back-play,
+  .popular-artist-card,
+  .popular-artist-image img,
+  .popular-artist-play {
+    transition: none;
+  }
+}
+
+
+/* =========================================================
+   HERO PLAY BUTTON WHILE LOADING
+========================================================= */
+
+.hero-play-loading::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  border-top-color: var(--accent, #e0b354);
+  animation: hero-play-loading-ring 1s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes hero-play-loading-ring {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* =========================================================
+   HOME HERO - TRACK INFORMATION
+========================================================= */
+
+.hero-copy {
+  min-width: 0;
+  flex: 1;
+
+  display: flex;
+  flex-direction: column;
+
+  justify-content: center;
+
+  overflow: hidden;
+}
+
+/* Now Playing label */
+
+.hero-now-playing {
+  margin: 0 0 12px;
+}
+
+/* =========================================================
+   SONG TITLE
+========================================================= */
+
+.hero-track-title {
+  width: 100%;
+
+  margin: 0;
+
+  font-size: clamp(
+    2rem,
+    4vw,
+    4rem
+  );
+
+  font-weight: 800;
+
+  line-height: 0.98;
+  letter-spacing: -0.045em;
+
+  color: var(
+    --text-primary,
+    #f7f7f7
+  );
+
+  /*
+   * Prevent extremely long YouTube
+   * titles from breaking the hero.
+   */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+
+  overflow: hidden;
+
+  overflow-wrap: anywhere;
+
+  max-width: 100%;
+}
+
+/* =========================================================
+   ARTIST + ALBUM
+========================================================= */
+
+.hero-track-details {
+  display: flex;
+
+  align-items: center;
+
+  flex-wrap: wrap;
+
+  gap: 8px;
+
+  margin-top: 16px;
+
+  min-width: 0;
+}
+
+.hero-track-artist {
+  min-width: 0;
+
+  max-width: 100%;
+
+  margin: 0;
+
+  color: var(
+    --text-primary,
+    #ffffff
+  );
+
+  font-size: clamp(
+    0.95rem,
+    1.4vw,
+    1.15rem
+  );
+
+  font-weight: 600;
+
+  line-height: 1.4;
+
+  white-space: nowrap;
+
+  overflow: hidden;
+
+  text-overflow: ellipsis;
+}
+
+.hero-track-album {
+  position: relative;
+
+  padding-left: 12px;
+
+  color: var(
+    --text-secondary,
+    #999
+  );
+
+  font-size: 0.85rem;
+
+  line-height: 1.4;
+
+  white-space: nowrap;
+
+  overflow: hidden;
+
+  text-overflow: ellipsis;
+}
+
+/*
+ * Separator between artist and album.
+ */
+
+.hero-track-album::before {
+  content: '•';
+
+  position: absolute;
+
+  left: 0;
+
+  color: var(
+    --text-muted,
+    #666
+  );
+}
+
+/* =========================================================
+   LONG TITLE
+========================================================= */
+
+.hero-track-title[title] {
+  cursor: default;
+}
+
+/* =========================================================
+   HERO PLAY BUTTON
+========================================================= */
+
+.hero-play {
+  flex: 0 0 auto;
+}
+
+/* =========================================================
+   TABLET
+========================================================= */
+
+@media (max-width: 1000px) {
+  .hero-track-title {
+    font-size: clamp(
+      2rem,
+      4.5vw,
+      3.2rem
+    );
+
+    line-height: 1;
+  }
+
+  .hero-track-details {
+    margin-top: 12px;
+  }
+}
+
+/* =========================================================
+   MOBILE
+========================================================= */
+
+@media (max-width: 720px) {
+  .hero-panel {
+    grid-template-columns:
+      110px
+      minmax(0, 1fr);
+
+    gap: 18px;
+
+    padding: 18px;
+  }
+
+  .hero-cover-wrapper {
+    width: 110px;
+    height: 110px;
+  }
+
+  .hero-track-title {
+    font-size: clamp(
+      1.5rem,
+      7vw,
+      2.2rem
+    );
+
+    line-height: 1.02;
+
+    letter-spacing: -0.035em;
+  }
+
+  .hero-now-playing {
+    margin-bottom: 7px;
+  }
+
+  .hero-track-details {
+    margin-top: 9px;
+
+    gap: 4px 7px;
+  }
+
+  .hero-track-artist {
+    font-size: 0.9rem;
+  }
+
+  .hero-track-album {
+    font-size: 0.76rem;
+
+    padding-left: 9px;
+  }
+
+  /*
+   * Put the play button in the bottom-right
+   * on smaller screens.
+   */
+
+  .hero-play {
+    position: absolute;
+
+    right: 16px;
+    bottom: 16px;
+  }
+}
+
+/* =========================================================
+   SMALL MOBILE
+========================================================= */
+
+@media (max-width: 480px) {
+  .hero-panel {
+    grid-template-columns: 88px minmax(0, 1fr);
+
+    gap: 14px;
+
+    padding: 15px;
+  }
+
+  .hero-cover-wrapper {
+    width: 88px;
+    height: 88px;
+  }
+
+  .hero-track-title {
+    font-size: 1.45rem;
+
+    -webkit-line-clamp: 2;
+  }
+
+  .hero-track-artist {
+    max-width: calc(
+      100% - 4px
+    );
+
+    font-size: 0.82rem;
+  }
+
+  .hero-track-album {
+    max-width: 100%;
+
+    font-size: 0.7rem;
+  }
+
+  .hero-play {
+    width: 42px;
+    height: 42px;
   }
 }

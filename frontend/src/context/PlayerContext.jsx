@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from 'react';
-
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          
 import { API_BASE_URL } from '../api';
 import { normalizeTrack } from '../utils/track';
 
@@ -15,6 +15,17 @@ const PlayerContext = createContext(null);
 
 const PLAYER_TRACK_STORAGE_KEY =
   'music-player-track-id';
+
+const PLAYER_PLAYBACK_STATE_STORAGE_KEY =
+  'music-player-playback-state';
+
+// Remove the previous per-song map. Normal song selection must always start
+// the selected song from the beginning. Only the last active song survives a
+// reload/crash.
+const LEGACY_PLAYBACK_POSITIONS_STORAGE_KEY =
+  'music-player-playback-positions';
+
+const PLAYBACK_PERSIST_INTERVAL_MS = 1000;
 
 function clampVolume(value) {
   const number = Number(value);
@@ -24,6 +35,70 @@ function clampVolume(value) {
   }
 
   return Math.min(1, Math.max(0, number));
+}
+
+function safeNumber(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function readSavedTrackId() {
+  try {
+    const value = localStorage.getItem(
+      PLAYER_TRACK_STORAGE_KEY,
+    );
+
+    return value ? String(value) : '';
+  } catch {
+    return '';
+  }
+}
+
+function readSavedPlaybackState() {
+  try {
+    const raw = localStorage.getItem(
+      PLAYER_PLAYBACK_STATE_STORAGE_KEY,
+    );
+
+    // The former implementation stored one resume position per song.
+    // Remove that store so it cannot restore an old position after a normal
+    // song change.
+    localStorage.removeItem(
+      LEGACY_PLAYBACK_POSITIONS_STORAGE_KEY,
+    );
+
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw);
+    const trackId =
+      parsed?.trackId == null
+        ? ''
+        : String(parsed.trackId);
+    const currentTime = Number(parsed?.currentTime);
+    const duration = Number(parsed?.duration);
+
+    if (
+      !trackId ||
+      !Number.isFinite(currentTime) ||
+      currentTime < 0
+    ) {
+      return null;
+    }
+
+    return {
+      trackId,
+      currentTime,
+      duration:
+        Number.isFinite(duration) && duration > 0
+          ? duration
+          : 0,
+      savedAt: Number(parsed?.savedAt) || 0,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function PlayerProvider({
@@ -44,6 +119,24 @@ export function PlayerProvider({
    * All playback state and commands are centralized here.
    */
   const audioRef = useRef(null);
+
+  /*
+   * Persisted playback recovery. Position is written about once per second
+   * during playback and immediately on pause/page hide/unload.
+   */
+  const savedPlaybackStateRef = useRef(
+    readSavedPlaybackState(),
+  );
+  const activeTrackIdRef = useRef(
+    readSavedTrackId(),
+  );
+  const initialRestoreDoneRef = useRef(false);
+  const activeIndexRef = useRef(activeIndex);
+  const lastPersistedAtRef = useRef(0);
+  const latestTimeRef = useRef(0);
+  const latestDurationRef = useRef(0);
+  const latestPlayingRef = useRef(false);
+  const restoredPositionTrackRef = useRef(null);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLoadingAudio, setIsLoadingAudio] = useState(false);
@@ -77,6 +170,14 @@ export function PlayerProvider({
     [tracks],
   );
 
+  const trackIdsKey = useMemo(
+    () =>
+      normalizedTracks
+        .map((track) => String(track.id))
+        .join('|'),
+    [normalizedTracks],
+  );
+
   /*
    * Keep the centralized queue synchronized with the current library.
    *
@@ -105,7 +206,19 @@ export function PlayerProvider({
         (track) => !queuedIds.has(String(track.id)),
       );
 
-      return [...stillValid, ...newTracks];
+      const nextQueue = [...stillValid, ...newTracks];
+
+      if (
+        nextQueue.length === previousQueue.length &&
+        nextQueue.every(
+          (track, index) =>
+            String(track.id) === String(previousQueue[index]?.id),
+        )
+      ) {
+        return previousQueue;
+      }
+
+      return nextQueue;
     });
   }, [normalizedTracks]);
 
@@ -120,6 +233,8 @@ export function PlayerProvider({
 
   const currentIndex =
     queueIndex >= 0 ? queueIndex : activeIndex;
+
+  activeIndexRef.current = activeIndex;
 
   const activeTrack =
     normalizedTracks[activeIndex] || null;
@@ -152,6 +267,35 @@ export function PlayerProvider({
       return activeTrack.audioUrl;
     }
 
+    /*
+     * YouTube playback.
+     *
+     * YouTube search results are not Prisma/library tracks, so they must
+     * never be sent to /api/tracks/:id/play.
+     *
+     * The backend resolves the YouTube audio stream through:
+     *
+     * GET /api/share/youtube/audio?id=VIDEO_ID
+     */
+    if (
+      activeTrack.source === 'youtube' &&
+      activeTrack.youtubeId
+    ) {
+      const url = new URL(
+        `${API_BASE_URL}/api/share/youtube/audio`,
+      );
+
+      url.searchParams.set(
+        'id',
+        activeTrack.youtubeId,
+      );
+
+      return url.toString();
+    }
+
+    /*
+     * Normal library/MEGA playback.
+     */
     if (!token) {
       return '';
     }
@@ -167,6 +311,8 @@ export function PlayerProvider({
     activeTrack?.id,
     activeTrack?.playable,
     activeTrack?.audioUrl,
+    activeTrack?.source,
+    activeTrack?.youtubeId,
     token,
   ]);
 
@@ -184,77 +330,201 @@ export function PlayerProvider({
   }, [volume]);
 
   /*
-   * Restore the selected TRACK ID after the library loads.
+   * Stop and fully release the audio element when the user logs out.
+   *
+   * PlayerProvider intentionally stays mounted across route changes, so
+   * changing authentication state alone does not destroy the <audio> node.
    */
   useEffect(() => {
-    if (normalizedTracks.length === 0) {
+    if (token) {
       return;
     }
 
-    let savedTrackId = null;
+    const audio = audioRef.current;
 
-    try {
-      savedTrackId = localStorage.getItem(
-        PLAYER_TRACK_STORAGE_KEY,
-      );
-    } catch {
+    if (!audio) {
       return;
     }
 
-    if (!savedTrackId) {
-      return;
-    }
+    audio.pause();
+    audio.currentTime = 0;
+    audio.removeAttribute('src');
+    audio.load();
 
-    const savedIndex =
-      normalizedTracks.findIndex(
-        (track) =>
-          String(track.id) === String(savedTrackId),
-      );
-
-    if (
-      savedIndex !== -1 &&
-      savedIndex !== currentIndex
-    ) {
-      setActiveIndex(savedIndex);
-    }
-  }, [
-    normalizedTracks,
-    currentIndex,
-    setActiveIndex,
-  ]);
+    setIsPlaying(false);
+    setCurrentTime(0);
+    setDuration(0);
+    setIsLoadingAudio(false);
+    setPlaybackError('');
+    restoredPositionTrackRef.current = null;
+  }, [token]);
 
   /*
-   * Persist the selected track ID, never the array index.
+   * Restore the last active track once after the library is available.
+   *
+   * This effect deliberately does NOT depend on activeIndex. Updating
+   * activeIndex is the effect's output, so subscribing to it would allow a
+   * parent that recreates the setter/array to create an update loop.
    */
-  const persistTrackId = useCallback(
-    (trackId) => {
-      if (!trackId) {
+  useEffect(() => {
+    if (
+      initialRestoreDoneRef.current ||
+      normalizedTracks.length === 0
+    ) {
+      return;
+    }
+
+    const savedTrackId =
+      activeTrackIdRef.current || readSavedTrackId();
+
+    if (!savedTrackId) {
+      initialRestoreDoneRef.current = true;
+      return;
+    }
+
+    const savedIndex = normalizedTracks.findIndex(
+      (track) =>
+        String(track.id) === String(savedTrackId),
+    );
+
+    if (savedIndex === -1) {
+      // Wait for the library to contain the saved track. trackIdsKey will
+      // change when the data actually changes.
+      return;
+    }
+
+    initialRestoreDoneRef.current = true;
+    activeTrackIdRef.current = String(
+      normalizedTracks[savedIndex].id,
+    );
+
+    if (savedIndex !== activeIndexRef.current) {
+      activeIndexRef.current = savedIndex;
+      setActiveIndex(savedIndex);
+    }
+  }, [trackIdsKey, normalizedTracks.length, setActiveIndex]);
+
+  /*
+   * Persist the selected track ID.
+   */
+  const persistTrackId = useCallback((trackId) => {
+    if (!trackId) {
+      return;
+    }
+
+    const normalizedId = String(trackId);
+    activeTrackIdRef.current = normalizedId;
+
+    try {
+      localStorage.setItem(
+        PLAYER_TRACK_STORAGE_KEY,
+        normalizedId,
+      );
+    } catch {
+      // Ignore localStorage errors.
+    }
+  }, []);
+
+  /*
+   * Persist ONLY the last active track.
+   *
+   * This means:
+   *   - reload/crash -> the last active song resumes
+   *   - changing/explicitly selecting a song -> that song starts at 0
+   */
+  const persistPlaybackPosition = useCallback(
+    ({ force = false, trackId = null, time = null, duration = null } = {}) => {
+      const targetTrackId = trackId
+        ? String(trackId)
+        : String(activeTrackIdRef.current || '');
+
+      if (!targetTrackId) {
         return;
       }
 
+      const now = Date.now();
+
+      if (
+        !force &&
+        now - lastPersistedAtRef.current <
+        PLAYBACK_PERSIST_INTERVAL_MS
+      ) {
+        return;
+      }
+
+      const audio = audioRef.current;
+
+      const currentTime =
+        time == null
+          ? (audio && Number.isFinite(audio.currentTime)
+            ? Math.max(0, audio.currentTime)
+            : Math.max(0, latestTimeRef.current))
+          : Math.max(0, safeNumber(time));
+
+      const resolvedDuration =
+        duration == null
+          ? (audio &&
+            Number.isFinite(audio.duration) &&
+            audio.duration > 0
+            ? audio.duration
+            : Math.max(0, latestDurationRef.current))
+          : Math.max(0, safeNumber(duration));
+
+      const nextState = {
+        trackId: targetTrackId,
+        currentTime,
+        duration: resolvedDuration,
+        savedAt: now,
+      };
+
       try {
         localStorage.setItem(
-          PLAYER_TRACK_STORAGE_KEY,
-          String(trackId),
+          PLAYER_PLAYBACK_STATE_STORAGE_KEY,
+          JSON.stringify(nextState),
         );
+
+        localStorage.removeItem(
+          LEGACY_PLAYBACK_POSITIONS_STORAGE_KEY,
+        );
+
+        const previousState = savedPlaybackStateRef.current;
+        savedPlaybackStateRef.current = nextState;
+
+        if (
+          !previousState ||
+          String(previousState.trackId) !== targetTrackId ||
+          currentTime === 0
+        ) {
+          restoredPositionTrackRef.current = null;
+        }
+
+        lastPersistedAtRef.current = now;
+        latestTimeRef.current = currentTime;
+        latestDurationRef.current = resolvedDuration;
       } catch {
-        // Ignore localStorage errors.
+        // Ignore localStorage quota/access errors.
       }
     },
     [],
   );
 
   /*
-   * Reset time/duration ONLY when the actual track changes.
+   * Remove the single persisted resume record.
    */
-  useEffect(() => {
-    setCurrentTime(0);
-    setDuration(activeTrack?.duration || 0);
-    setPlaybackError('');
-  }, [
-    activeTrack?.id,
-    activeTrack?.duration,
-  ]);
+  const clearPlaybackPosition = useCallback(() => {
+    savedPlaybackStateRef.current = null;
+
+    try {
+      localStorage.removeItem(
+        PLAYER_PLAYBACK_STATE_STORAGE_KEY,
+      );
+      localStorage.removeItem(
+        LEGACY_PLAYBACK_POSITIONS_STORAGE_KEY,
+      );
+    } catch {
+      // Ignore localStorage errors.
+    }
+  }, []);
 
   /*
    * Start playback when the source is ready and isPlaying is true.
@@ -274,7 +544,7 @@ export function PlayerProvider({
       setIsPlaying(false);
       setPlaybackError(
         error?.message ||
-          'Playback could not start.',
+        'Playback could not start.',
       );
     });
   }, [streamUrl, isPlaying]);
@@ -306,7 +576,7 @@ export function PlayerProvider({
     ) => {
       const nextQueue =
         Array.isArray(queueTracks) &&
-        queueTracks.length
+          queueTracks.length
           ? queueTracks
           : tracks;
 
@@ -326,30 +596,60 @@ export function PlayerProvider({
       const nextTrack =
         nextNormalizedTracks[nextIndex];
 
-      setTracks(nextQueue);
-      setQueue(nextNormalizedTracks);
+      console.log('[Player] Selected track:', nextTrack);
+      console.log('[Player] YouTube metadata:', {
+        id: nextTrack?.id,
+        source: nextTrack?.source,
+        youtubeId: nextTrack?.youtubeId,
+        audioUrl: nextTrack?.audioUrl,
+        playable: nextTrack?.playable,
+      });
 
       if (
         activeTrack?.id &&
-        String(activeTrack.id) !==
-          String(nextTrack.id)
+        String(activeTrack.id) !== String(nextTrack.id)
       ) {
         pushHistory(activeTrack.id);
       }
 
+      // Explicit selection is always a restart, even if it is the same song.
       persistTrackId(nextTrack.id);
+      persistPlaybackPosition({
+        force: true,
+        trackId: nextTrack.id,
+        time: 0,
+        duration: nextTrack.duration,
+      });
+
+      const audio = audioRef.current;
+      if (audio) {
+        audio.pause();
+        try {
+          audio.currentTime = 0;
+        } catch {
+          // Ignore while the source is changing.
+        }
+      }
+
+      latestTimeRef.current = 0;
+      latestDurationRef.current =
+        Math.max(0, safeNumber(nextTrack.duration));
+      setCurrentTime(0);
+      setDuration(nextTrack.duration || 0);
+
+      setTracks(nextQueue);
+      setQueue(nextNormalizedTracks);
+      activeIndexRef.current = nextIndex;
+      setActiveIndex(nextIndex);
 
       if (!nextTrack.playable) {
-        audioRef.current?.pause();
         setIsPlaying(false);
-        setActiveIndex(nextIndex);
         setPlaybackError(
           'This result is discoverable but not stored in your playable library yet.',
         );
         return;
       }
 
-      setActiveIndex(nextIndex);
       setPlaybackError('');
       setIsPlaying(shouldPlay);
     },
@@ -358,6 +658,7 @@ export function PlayerProvider({
       setTracks,
       setQueue,
       setActiveIndex,
+      persistPlaybackPosition,
       persistTrackId,
       activeTrack?.id,
       pushHistory,
@@ -391,13 +692,35 @@ export function PlayerProvider({
 
       if (
         activeTrack?.id &&
-        String(activeTrack.id) !==
-          String(nextTrack.id)
+        String(activeTrack.id) !== String(nextTrack.id)
       ) {
         pushHistory(activeTrack.id);
       }
 
       persistTrackId(nextTrack.id);
+      persistPlaybackPosition({
+        force: true,
+        trackId: nextTrack.id,
+        time: 0,
+        duration: nextTrack.duration,
+      });
+
+      const audio = audioRef.current;
+      if (audio) {
+        audio.pause();
+        try {
+          audio.currentTime = 0;
+        } catch {
+          // Ignore while media is changing source.
+        }
+      }
+
+      latestTimeRef.current = 0;
+      latestDurationRef.current =
+        Math.max(0, safeNumber(nextTrack.duration));
+      setCurrentTime(0);
+      setDuration(nextTrack.duration || 0);
+      activeIndexRef.current = wrappedIndex;
       setActiveIndex(wrappedIndex);
       setPlaybackError('');
       setIsPlaying(true);
@@ -406,6 +729,7 @@ export function PlayerProvider({
       normalizedTracks,
       setActiveIndex,
       persistTrackId,
+      persistPlaybackPosition,
       activeTrack?.id,
       pushHistory,
     ],
@@ -459,8 +783,7 @@ export function PlayerProvider({
 
       const playableCandidates =
         candidates.filter(
-          (index) =>
-            playbackQueue[index]?.playable,
+          (index) => playbackQueue[index]?.playable,
         );
 
       const source =
@@ -470,7 +793,7 @@ export function PlayerProvider({
 
       nextIndex =
         source[
-          Math.floor(Math.random() * source.length)
+        Math.floor(Math.random() * source.length)
         ];
     } else {
       let index = currentIndex;
@@ -503,6 +826,29 @@ export function PlayerProvider({
     }
 
     persistTrackId(next.id);
+    persistPlaybackPosition({
+      force: true,
+      trackId: next.id,
+      time: 0,
+      duration: next.duration,
+    });
+
+    const audio = audioRef.current;
+    if (audio) {
+      audio.pause();
+      try {
+        audio.currentTime = 0;
+      } catch {
+        // Ignore while media is changing source.
+      }
+    }
+
+    latestTimeRef.current = 0;
+    latestDurationRef.current =
+      Math.max(0, safeNumber(next.duration));
+    setCurrentTime(0);
+    setDuration(next.duration || 0);
+    activeIndexRef.current = nextIndex;
     setActiveIndex(nextIndex);
     setPlaybackError('');
     setIsPlaying(true);
@@ -511,9 +857,9 @@ export function PlayerProvider({
     queue,
     shuffle,
     currentIndex,
-    findPlayableIndex,
     activeTrack?.id,
     pushHistory,
+    persistPlaybackPosition,
     persistTrackId,
     setActiveIndex,
   ]);
@@ -530,6 +876,11 @@ export function PlayerProvider({
     if (audio && audio.currentTime > 3) {
       audio.currentTime = 0;
       setCurrentTime(0);
+      latestTimeRef.current = 0;
+      persistPlaybackPosition({
+        force: true,
+        time: 0,
+      });
       return;
     }
 
@@ -541,7 +892,7 @@ export function PlayerProvider({
     if (shuffle && historyRef.current.length > 0) {
       const previousId =
         historyRef.current[
-          historyRef.current.length - 1
+        historyRef.current.length - 1
         ];
 
       historyRef.current =
@@ -582,6 +933,28 @@ export function PlayerProvider({
       playbackQueue[previousIndex];
 
     persistTrackId(previous.id);
+    persistPlaybackPosition({
+      force: true,
+      trackId: previous.id,
+      time: 0,
+      duration: previous.duration,
+    });
+
+    if (audio) {
+      audio.pause();
+      try {
+        audio.currentTime = 0;
+      } catch {
+        // Ignore while media is changing source.
+      }
+    }
+
+    latestTimeRef.current = 0;
+    latestDurationRef.current =
+      Math.max(0, safeNumber(previous.duration));
+    setCurrentTime(0);
+    setDuration(previous.duration || 0);
+    activeIndexRef.current = previousIndex;
     setActiveIndex(previousIndex);
     setPlaybackError('');
     setIsPlaying(true);
@@ -591,9 +964,40 @@ export function PlayerProvider({
     shuffle,
     currentIndex,
     findPlayableIndex,
+    persistPlaybackPosition,
     persistTrackId,
     setActiveIndex,
   ]);
+
+  /*
+   * Explicitly stop and release the current audio source.
+   *
+   * This is different from only calling setIsPlaying(false):
+   * React state changes do not pause the underlying HTMLAudioElement.
+   */
+  const stopPlayback = useCallback(() => {
+    const audio = audioRef.current;
+
+    if (audio) {
+      audio.pause();
+      audio.currentTime = 0;
+      audio.removeAttribute('src');
+      audio.load();
+    }
+
+    latestPlayingRef.current = false;
+    latestTimeRef.current = 0;
+    latestDurationRef.current = 0;
+
+    clearPlaybackPosition();
+    restoredPositionTrackRef.current = null;
+
+    setIsPlaying(false);
+    setCurrentTime(0);
+    setDuration(0);
+    setIsLoadingAudio(false);
+    setPlaybackError('');
+  }, [clearPlaybackPosition]);
 
   /*
    * Play / pause.
@@ -611,6 +1015,7 @@ export function PlayerProvider({
     }
 
     if (!audio.paused) {
+      persistPlaybackPosition({ force: true });
       audio.pause();
       return;
     }
@@ -621,12 +1026,13 @@ export function PlayerProvider({
       setIsPlaying(false);
       setPlaybackError(
         error?.message ||
-          'Playback could not start.',
+        'Playback could not start.',
       );
     });
   }, [
     streamUrl,
     activeTrack?.playable,
+    persistPlaybackPosition,
   ]);
 
   /*
@@ -650,8 +1056,13 @@ export function PlayerProvider({
           // Ignore invalid seek.
         }
       }
+
+      persistPlaybackPosition({
+        force: true,
+        time: nextTime,
+      });
     },
-    [],
+    [persistPlaybackPosition],
   );
 
   /*
@@ -675,14 +1086,6 @@ export function PlayerProvider({
   /*
    * Shuffle toggle.
    */
-  const updateQueue = useCallback((nextQueue) => {
-    const normalizedQueue = Array.isArray(nextQueue)
-      ? nextQueue.map(normalizeTrack)
-      : [];
-
-    setQueue(normalizedQueue);
-  }, []);
-
   const toggleShuffle = useCallback(() => {
     setShuffle((previous) => !previous);
   }, []);
@@ -723,24 +1126,27 @@ export function PlayerProvider({
    */
   const handleEnded = useCallback(() => {
     if (normalizedTracks.length === 0) {
+      clearPlaybackPosition();
       setIsPlaying(false);
       return;
     }
 
-    /*
-     * Repeat-one: replay the same track.
-     */
     if (repeat === 'one') {
       const audio = audioRef.current;
 
       if (audio) {
         audio.currentTime = 0;
+        latestTimeRef.current = 0;
+        persistPlaybackPosition({
+          force: true,
+          time: 0,
+        });
 
         audio.play().catch((error) => {
           setIsPlaying(false);
           setPlaybackError(
             error?.message ||
-              'Playback could not restart.',
+            'Playback could not restart.',
           );
         });
       }
@@ -748,9 +1154,10 @@ export function PlayerProvider({
       return;
     }
 
-    /*
-     * Shuffle: choose another playable track.
-     */
+    // A fully finished song has no resume point.
+    clearPlaybackPosition();
+    latestTimeRef.current = 0;
+
     if (
       shuffle &&
       normalizedTracks.length > 1
@@ -759,17 +1166,11 @@ export function PlayerProvider({
       return;
     }
 
-    /*
-     * Normal next-track behavior.
-     */
     const nextIndex = currentIndex + 1;
 
     if (nextIndex >= normalizedTracks.length) {
-      /*
-       * Repeat-all wraps to the first playable track.
-       * Repeat-off stops at the end of the queue.
-       */
       if (repeat !== 'all') {
+        setCurrentTime(0);
         setIsPlaying(false);
         return;
       }
@@ -780,17 +1181,31 @@ export function PlayerProvider({
         );
 
       if (firstPlayable < 0) {
+        setCurrentTime(0);
         setIsPlaying(false);
         return;
       }
 
-      const next = normalizedTracks[firstPlayable];
+      const next =
+        normalizedTracks[firstPlayable];
 
       if (activeTrack?.id) {
         pushHistory(activeTrack.id);
       }
 
       persistTrackId(next.id);
+      persistPlaybackPosition({
+        force: true,
+        trackId: next.id,
+        time: 0,
+        duration: next.duration,
+      });
+      setCurrentTime(0);
+      setDuration(next.duration || 0);
+      latestTimeRef.current = 0;
+      latestDurationRef.current =
+        Math.max(0, safeNumber(next.duration));
+      activeIndexRef.current = firstPlayable;
       setActiveIndex(firstPlayable);
       setPlaybackError('');
       setIsPlaying(true);
@@ -801,6 +1216,7 @@ export function PlayerProvider({
       findPlayableIndex(currentIndex, 1);
 
     if (nextIndexPlayable < 0) {
+      setCurrentTime(0);
       setIsPlaying(false);
       return;
     }
@@ -813,6 +1229,18 @@ export function PlayerProvider({
     }
 
     persistTrackId(next.id);
+    persistPlaybackPosition({
+      force: true,
+      trackId: next.id,
+      time: 0,
+      duration: next.duration,
+    });
+    setCurrentTime(0);
+    setDuration(next.duration || 0);
+    latestTimeRef.current = 0;
+    latestDurationRef.current =
+      Math.max(0, safeNumber(next.duration));
+    activeIndexRef.current = nextIndexPlayable;
     setActiveIndex(nextIndexPlayable);
     setPlaybackError('');
     setIsPlaying(true);
@@ -825,9 +1253,44 @@ export function PlayerProvider({
     findPlayableIndex,
     activeTrack?.id,
     pushHistory,
+    persistPlaybackPosition,
     persistTrackId,
+    clearPlaybackPosition,
     setActiveIndex,
   ]);
+
+  /*
+   * Persist the current track before the document is hidden/unloaded.
+   */
+  useEffect(() => {
+    const persistBeforeExit = () => {
+      persistPlaybackPosition({ force: true });
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        persistPlaybackPosition({ force: true });
+      }
+    };
+
+    window.addEventListener('pagehide', persistBeforeExit);
+    window.addEventListener('beforeunload', persistBeforeExit);
+    window.addEventListener('freeze', persistBeforeExit);
+    document.addEventListener(
+      'visibilitychange',
+      handleVisibilityChange,
+    );
+
+    return () => {
+      window.removeEventListener('pagehide', persistBeforeExit);
+      window.removeEventListener('beforeunload', persistBeforeExit);
+      window.removeEventListener('freeze', persistBeforeExit);
+      document.removeEventListener(
+        'visibilitychange',
+        handleVisibilityChange,
+      );
+    };
+  }, [persistPlaybackPosition]);
 
   /*
    * Audio event handlers for the ONE persistent audio element.
@@ -847,31 +1310,78 @@ export function PlayerProvider({
       },
 
       onLoadedMetadata: (event) => {
-        const mediaDuration =
-          event.currentTarget.duration;
-
-        setDuration(
+        const audio = event.currentTarget;
+        const mediaDuration = audio.duration;
+        const nextDuration =
           Number.isFinite(mediaDuration)
             ? mediaDuration
-            : activeTrack?.duration || 0,
-        );
+            : activeTrack?.duration || 0;
+
+        setDuration(nextDuration);
+        latestDurationRef.current = nextDuration;
+
+        const trackId = activeTrack?.id;
+        const savedState = savedPlaybackStateRef.current;
+
+        if (
+          trackId &&
+          savedState &&
+          String(savedState.trackId) === String(trackId) &&
+          restoredPositionTrackRef.current !== String(trackId)
+        ) {
+          const maxTime =
+            Number.isFinite(nextDuration) && nextDuration > 0
+              ? nextDuration
+              : Number.MAX_SAFE_INTEGER;
+
+          const restoredTime = Math.min(
+            Math.max(0, safeNumber(savedState.currentTime)),
+            maxTime,
+          );
+
+          try {
+            audio.currentTime = restoredTime;
+          } catch {
+            // Some browsers delay seeking until media is sufficiently ready.
+          }
+
+          setCurrentTime(restoredTime);
+          latestTimeRef.current = restoredTime;
+          restoredPositionTrackRef.current = String(trackId);
+        }
 
         setIsLoadingAudio(false);
       },
 
       onTimeUpdate: (event) => {
-        setCurrentTime(
-          event.currentTarget.currentTime,
-        );
+        const audio = event.currentTarget;
+        const nextTime = Number.isFinite(audio.currentTime)
+          ? Math.max(0, audio.currentTime)
+          : 0;
+
+        latestTimeRef.current = nextTime;
+
+        if (
+          Number.isFinite(audio.duration) &&
+          audio.duration > 0
+        ) {
+          latestDurationRef.current = audio.duration;
+        }
+
+        setCurrentTime(nextTime);
+        persistPlaybackPosition();
       },
 
       onPlay: () => {
+        latestPlayingRef.current = true;
         setIsPlaying(true);
         setIsLoadingAudio(false);
       },
 
       onPause: () => {
+        latestPlayingRef.current = false;
         setIsPlaying(false);
+        persistPlaybackPosition({ force: true });
       },
 
       onEnded: handleEnded,
@@ -886,8 +1396,10 @@ export function PlayerProvider({
     }),
     [
       streamUrl,
+      activeTrack?.id,
       activeTrack?.duration,
       handleEnded,
+      persistPlaybackPosition,
     ],
   );
 
@@ -956,6 +1468,7 @@ export function PlayerProvider({
        */
       togglePlayback,
       seekTo,
+      stopPlayback,
 
       /*
        * Progress / errors
@@ -990,6 +1503,7 @@ export function PlayerProvider({
       previousTrack,
       togglePlayback,
       seekTo,
+      stopPlayback,
       progressMax,
       progressValue,
       playbackError,

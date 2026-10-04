@@ -4,6 +4,7 @@ import ProfileSettings from './ProfileSettings';
 import PlaybackSettings from './PlaybackSettings';
 import AppearanceSettings from './AppearanceSettings';
 import SecuritySettings from './SecuritySettings';
+import PageHeader from '../../components/PageHeader';
 
 function SettingsPage({
   user,
@@ -15,15 +16,11 @@ function SettingsPage({
 }) {
   return (
     <section className="settings-page">
-      <header className="page-heading compact-heading">
-        <p className="eyebrow">Preferences</p>
-
-        <h1>Settings</h1>
-
-        <p>
-          Manage your account and music player preferences.
-        </p>
-      </header>
+      <PageHeader
+        eyebrow="Settings"
+        title="Manage your preferences"
+        description="Update your profile, playback, appearance, and security settings."
+      />
 
       <div className="settings-stack">
         <ProfileSettings user={user} />

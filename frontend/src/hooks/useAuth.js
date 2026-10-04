@@ -1,59 +1,41 @@
 import {
   useCallback,
-  useEffect,
   useState,
 } from 'react';
 
-import { authApi } from '../api';
-
-import {
-  clearStoredSession,
-  STORAGE_TOKEN_KEY,
-  STORAGE_USER_KEY,
-  submitAuth as submitAuthHandler,
-} from '../handlers/authHandlers';
-
-function readStoredUser() {
-  try {
-    return JSON.parse(
-      localStorage.getItem(
-        STORAGE_USER_KEY,
-      ) || 'null',
-    );
-  } catch {
-    return null;
-  }
-}
+import { useAppStore } from '../store/appStore';
 
 export function useAuth({ navigate }) {
-  /*
-   * Restore token once when the application starts.
-   */
-  const [token, setToken] = useState(
-    () =>
-      localStorage.getItem(
-        STORAGE_TOKEN_KEY,
-      ) || '',
+  const token = useAppStore(
+    (state) => state.token,
   );
-
-  /*
-   * Restore cached user once.
-   */
-  const [user, setUser] = useState(
-    () => readStoredUser(),
+  const user = useAppStore(
+    (state) => state.user,
   );
-
-  /*
-   * Initial authentication state.
-   */
-  const [sessionState, setSessionState] =
-    useState(() =>
-      localStorage.getItem(
-        STORAGE_TOKEN_KEY,
-      )
-        ? 'checking'
-        : 'anonymous',
-    );
+  const sessionState = useAppStore(
+    (state) => state.sessionState,
+  );
+  const authError = useAppStore(
+    (state) => state.authError,
+  );
+  const authLoading = useAppStore(
+    (state) => state.authLoading,
+  );
+  const initializing = useAppStore(
+    (state) => state.initializing,
+  );
+  const initialized = useAppStore(
+    (state) => state.initialized,
+  );
+  const authenticate = useAppStore(
+    (state) => state.authenticate,
+  );
+  const clearSessionState = useAppStore(
+    (state) => state.clearSessionState,
+  );
+  const setAuthError = useAppStore(
+    (state) => state.setAuthError,
+  );
 
   const [authMode, setAuthMode] =
     useState(() =>
@@ -69,120 +51,53 @@ export function useAuth({ navigate }) {
       password: '',
     });
 
-  const [authError, setAuthError] =
-    useState('');
-
-  const [authLoading, setAuthLoading] =
-    useState(false);
-
-  /*
-   * Clear the current session.
-   */
   const clearSession = useCallback(() => {
-    clearStoredSession();
-
-    setToken('');
-    setUser(null);
-    setSessionState('anonymous');
+    clearSessionState();
 
     navigate('/login', {
       replace: true,
     });
-  }, [navigate]);
+  }, [
+    clearSessionState,
+    navigate,
+  ]);
 
-  /*
-   * Validate the stored token.
-   *
-   * This should run once for the current
-   * authentication token.
-   */
-  useEffect(() => {
-    if (!token) {
-      setSessionState('anonymous');
-      return undefined;
-    }
-
-    let cancelled = false;
-
-    authApi
-      .me(token)
-      .then(({ user: currentUser }) => {
-        if (cancelled) {
-          return;
-        }
-
-        /*
-         * Store the latest user information.
-         */
-        try {
-          localStorage.setItem(
-            STORAGE_USER_KEY,
-            JSON.stringify(currentUser),
-          );
-        } catch {
-          // Ignore localStorage errors.
-        }
-
-        setUser(currentUser);
-        setSessionState(
-          'authenticated',
-        );
-      })
-      .catch((error) => {
-        if (cancelled) {
-          return;
-        }
-
-        /*
-         * Invalid/expired token.
-         */
-        if (error?.status === 401) {
-          clearSession();
-          return;
-        }
-
-        /*
-         * Other authentication failure.
-         */
-        setUser(null);
-        setSessionState('anonymous');
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [token, clearSession]);
-
-  /*
-   * Login / Signup.
-   */
   const submitAuth = useCallback(
-    (
+    async (
       event,
       nextAuthMode = authMode,
-    ) =>
-      submitAuthHandler({
-        event,
-        authMode: nextAuthMode,
-        authForm,
-        setAuthLoading,
-        setAuthError,
-        setAuthForm,
-        setToken,
-        setUser,
-        setSessionState,
-        navigate,
-      }),
+    ) => {
+      event.preventDefault();
+
+      try {
+        const data =
+          await authenticate({
+            authMode: nextAuthMode,
+            authForm,
+          });
+
+        setAuthForm({
+          email: '',
+          password: '',
+        });
+
+        navigate(
+          data.user?.role === 'ADMIN'
+            ? '/admin'
+            : '/dashboard',
+        );
+      } catch {
+        // The store owns authError.
+      }
+    },
     [
       authMode,
       authForm,
+      authenticate,
       navigate,
     ],
   );
 
-  /*
-   * Login.
-   */
   const submitLogin = useCallback(
     (event) =>
       submitAuth(
@@ -192,9 +107,6 @@ export function useAuth({ navigate }) {
     [submitAuth],
   );
 
-  /*
-   * Signup.
-   */
   const submitSignup = useCallback(
     (event) =>
       submitAuth(
@@ -204,9 +116,6 @@ export function useAuth({ navigate }) {
     [submitAuth],
   );
 
-  /*
-   * Switch login/register mode.
-   */
   const switchAuthMode = useCallback(
     () => {
       const nextMode =
@@ -222,39 +131,29 @@ export function useAuth({ navigate }) {
     [
       authMode,
       navigate,
+      setAuthError,
     ],
   );
 
   return {
     token,
-
     user,
-
     sessionState,
-
     authMode,
-
     authForm,
-
     authError,
-
     authLoading,
-
     loading:
-      sessionState === 'checking',
+      initializing ||
+      (!initialized &&
+        sessionState === 'checking'),
 
     setAuthForm,
-
     clearSession,
-
     logout: clearSession,
-
     submitAuth,
-
     submitLogin,
-
     submitSignup,
-
     switchAuthMode,
   };
 }

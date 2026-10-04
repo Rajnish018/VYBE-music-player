@@ -131,12 +131,12 @@ function Player({
   const progressPercent =
     safeMax > 0
       ? `${Math.min(
-          100,
-          Math.max(
-            0,
-            (safeProgress / safeMax) * 100,
-          ),
-        )}%`
+        100,
+        Math.max(
+          0,
+          (safeProgress / safeMax) * 100,
+        ),
+      )}%`
       : '0%';
 
   const safeProgressValue =
@@ -146,9 +146,8 @@ function Player({
 
   return (
     <footer
-      className={`player ${
-        isPlaying ? 'player-playing' : ''
-      }`}
+      className={`player ${isPlaying ? 'player-playing' : ''
+        }`}
     >
       {/* =====================================================
           LEFT — NOW PLAYING
@@ -156,11 +155,10 @@ function Player({
 
       <div className="now-playing">
         <div
-          className={`player-cover ${
-            isPlaying
+          className={`player-cover ${isPlaying
               ? 'player-cover-playing'
               : ''
-          }`}
+            }`}
         >
           <CoverImage
             src={activeTrack?.thumbnailUrl}
@@ -218,11 +216,10 @@ function Player({
                 : 'Enable shuffle'
             }
             aria-pressed={shuffle}
-            className={`player-button ${
-              shuffle
+            className={`player-button ${shuffle
                 ? 'player-option-active'
                 : ''
-            }`}
+              }`}
             title={
               shuffle
                 ? 'Shuffle on'
@@ -244,38 +241,30 @@ function Player({
             <Icon name="previous" />
           </button>
 
-          {/* PLAY / PAUSE */}
+          {/* =================================================
+              PLAY / PAUSE
+
+              IMPORTANT:
+              Do NOT replace this icon with a loader while
+              audio is loading.
+
+              The audio can be loading while the user's
+              intended state is still Play or Pause.
+              ================================================= */}
 
           <button
-            className={`primary-control ${
-              isPlaying
+            className={`primary-control ${isPlaying
                 ? 'primary-control-playing'
                 : ''
-            }`}
+              }`}
             type="button"
             onClick={onTogglePlayback}
-            aria-label={
-              isPlaying
-                ? 'Pause'
-                : 'Play'
-            }
-            title={
-              isPlaying
-                ? 'Pause'
-                : 'Play'
-            }
+            aria-label={isPlaying ? 'Pause' : 'Play'}
+            title={isPlaying ? 'Pause' : 'Play'}
           >
-            {isLoading ? (
-              <Icon name="loader" />
-            ) : (
-              <Icon
-                name={
-                  isPlaying
-                    ? 'pause'
-                    : 'play'
-                }
-              />
-            )}
+            <Icon
+              name={isPlaying ? 'pause' : 'play'}
+            />
           </button>
 
           {/* NEXT */}
@@ -299,11 +288,10 @@ function Player({
             aria-pressed={
               repeat !== 'off'
             }
-            className={`player-button ${
-              repeat !== 'off'
+            className={`player-button ${repeat !== 'off'
                 ? 'player-option-active'
                 : ''
-            }`}
+              }`}
             title={repeatLabel}
           >
             <span className="repeat-control">
@@ -326,26 +314,48 @@ function Player({
             PROGRESS
             =================================================== */}
 
-        <div className="progress-row">
+        <div
+          className={`progress-row ${isLoading
+              ? 'progress-row-loading'
+              : ''
+            }`}
+        >
           <span className="progress-time">
             {formatTime(safeProgress)}
           </span>
 
-          <input
-            className="progress-slider"
-            aria-label="Seek"
-            type="range"
-            min="0"
-            max={safeMax}
-            value={safeProgressValue}
-            onChange={(event) => {
-              onSeek?.(event.target.value);
-            }}
-            style={{
-              '--slider-value':
-                progressPercent,
-            }}
-          />
+          <div className="progress-track-wrapper">
+
+            {/* =============================================
+                LOADING LINE
+
+                This appears on the progress bar instead
+                of putting a loader inside the Play button.
+                ============================================= */}
+
+            {isLoading ? (
+              <span
+                className="player-loading-line"
+                aria-hidden="true"
+              />
+            ) : null}
+
+            <input
+              className="progress-slider"
+              aria-label="Seek"
+              type="range"
+              min="0"
+              max={safeMax}
+              value={safeProgressValue}
+              onChange={(event) => {
+                onSeek?.(event.target.value);
+              }}
+              style={{
+                '--slider-value':
+                  progressPercent,
+              }}
+            />
+          </div>
 
           <span className="progress-time">
             {formatTime(safeMax)}

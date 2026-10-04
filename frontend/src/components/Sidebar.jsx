@@ -1,77 +1,301 @@
 import { useEffect, useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import {
+  useLocation,
+  useNavigate,
+} from 'react-router-dom';
+
 import Icon from './Icons';
 import './Sidebar.css';
 
 const navItems = [
-  { view: 'home', label: 'Home', icon: 'home' },
-  { view: 'discover', label: 'Discover', icon: 'search' },
-  { view: 'library', label: 'Library', icon: 'library' },
-  { view: 'favorites', label: 'Favorites', icon: 'heart' },
-  { view: 'albums', label: 'Albums', icon: 'album' },
-  { view: 'settings', label: 'Settings', icon: 'settings' },
+  {
+    view: 'home',
+    label: 'Home',
+    icon: 'home',
+  },
+  {
+    view: 'discover',
+    label: 'Discover',
+    icon: 'search',
+  },
+  {
+    view: 'library',
+    label: 'Library',
+    icon: 'library',
+  },
+  {
+    view: 'favorites',
+    label: 'Favorites',
+    icon: 'heart',
+  },
+  {
+    view: 'albums',
+    label: 'Albums',
+    icon: 'album',
+  },
+  {
+    view: 'artists',
+    label: 'Artists',
+    icon: 'user',
+  },
+  {
+    view: 'settings',
+    label: 'Settings',
+    icon: 'settings',
+  },
 ];
 
-function Sidebar({ view, user, onNavigate, onLogout }) {
-  const [mobileOpen, setMobileOpen] = useState(false);
+function Sidebar({
+  view,
+  user,
+  onNavigate,
+  onLogout,
+}) {
+  const [mobileOpen, setMobileOpen] =
+    useState(false);
+
   const location = useLocation();
+  const navigate = useNavigate();
 
   /*
-   * Albums has two types of routes:
-   *
-   * /albums
-   * /albums/:albumKey
-   *
-   * Both should keep "Albums" active in the sidebar.
-   */
-  const isAlbumRoute =
-    location.pathname === '/albums' ||
-    location.pathname.startsWith('/albums/');
+  |--------------------------------------------------------------------------
+  | CURRENT PATH
+  |--------------------------------------------------------------------------
+  */
 
-  function getNavClass(itemView) {
-  // Dynamic album pages must belong only to Albums.
-  if (isAlbumRoute) {
-    return itemView === 'albums'
+  const pathname =
+    location.pathname;
+
+  /*
+  |--------------------------------------------------------------------------
+  | ROUTE DETECTION
+  |--------------------------------------------------------------------------
+  */
+
+  const isHomeRoute =
+    pathname === '/' ||
+    pathname === '/dashboard' ||
+    pathname === '/home';
+
+  const isAlbumRoute =
+    pathname === '/albums' ||
+    pathname.startsWith('/albums/');
+
+  const isArtistRoute =
+    pathname === '/artists' ||
+    pathname.startsWith('/artists/');
+
+  const isDiscoverRoute =
+    pathname === '/discover' ||
+    pathname.startsWith('/discover/');
+
+  const isLibraryRoute =
+    pathname === '/library' ||
+    pathname.startsWith('/library/');
+
+  const isFavoritesRoute =
+    pathname === '/favorites' ||
+    pathname.startsWith('/favorites/');
+
+  const isSettingsRoute =
+    pathname === '/settings' ||
+    pathname.startsWith('/settings/');
+
+  /*
+  |--------------------------------------------------------------------------
+  | ADMIN ROUTES
+  |--------------------------------------------------------------------------
+  */
+
+  const isAdminRoute =
+    pathname === '/admin';
+
+  const isManageSongsRoute =
+    pathname === '/admin/songs' ||
+    pathname === '/manage-songs';
+
+  const isManageArtistsRoute =
+    pathname === '/admin/artists';
+
+  /*
+  |--------------------------------------------------------------------------
+  | ACTIVE NAV CLASS
+  |--------------------------------------------------------------------------
+  */
+
+  function getNavClass(
+    itemView,
+  ) {
+    if (itemView === 'home') {
+      return isHomeRoute
+        ? 'nav-item active'
+        : 'nav-item';
+    }
+
+    if (itemView === 'artists') {
+      return isArtistRoute
+        ? 'nav-item active'
+        : 'nav-item';
+    }
+
+    if (itemView === 'albums') {
+      return isAlbumRoute
+        ? 'nav-item active'
+        : 'nav-item';
+    }
+
+    if (itemView === 'discover') {
+      return isDiscoverRoute
+        ? 'nav-item active'
+        : 'nav-item';
+    }
+
+    if (itemView === 'library') {
+      return isLibraryRoute
+        ? 'nav-item active'
+        : 'nav-item';
+    }
+
+    if (itemView === 'favorites') {
+      return isFavoritesRoute
+        ? 'nav-item active'
+        : 'nav-item';
+    }
+
+    if (itemView === 'settings') {
+      return isSettingsRoute
+        ? 'nav-item active'
+        : 'nav-item';
+    }
+
+    /*
+     * Admin Dashboard
+     */
+    if (itemView === 'admin') {
+      return isAdminRoute
+        ? 'nav-item active'
+        : 'nav-item';
+    }
+
+    /*
+     * Manage Songs
+     */
+    if (
+      itemView ===
+      'manage-songs'
+    ) {
+      return isManageSongsRoute
+        ? 'nav-item active'
+        : 'nav-item';
+    }
+
+    /*
+     * Manage Artists
+     */
+    if (
+      itemView ===
+      'manage-artists'
+    ) {
+      return isManageArtistsRoute
+        ? 'nav-item active'
+        : 'nav-item';
+    }
+
+    return view === itemView
       ? 'nav-item active'
       : 'nav-item';
   }
 
-  return view === itemView
-    ? 'nav-item active'
-    : 'nav-item';
-}
+  /*
+  |--------------------------------------------------------------------------
+  | NAVIGATION
+  |--------------------------------------------------------------------------
+  */
 
-  function navigateTo(nextView) {
+  function navigateTo(
+    nextView,
+  ) {
     setMobileOpen(false);
+
+    /*
+     * Real React Router routes
+     */
+    if (nextView === 'admin') {
+      navigate('/admin');
+      return;
+    }
+
+    if (
+      nextView ===
+      'manage-artists'
+    ) {
+      navigate(
+        '/admin/artists',
+      );
+      return;
+    }
+
+    /*
+     * Existing application-view
+     * navigation.
+     */
     onNavigate(nextView);
   }
+
+  /*
+  |--------------------------------------------------------------------------
+  | LOGOUT
+  |--------------------------------------------------------------------------
+  */
 
   function handleLogout() {
     setMobileOpen(false);
     onLogout();
   }
 
-  // Close mobile drawer after route change or when viewport becomes desktop.
+  /*
+  |--------------------------------------------------------------------------
+  | RESPONSIVE SIDEBAR
+  |--------------------------------------------------------------------------
+  */
+
   useEffect(() => {
     function handleResize() {
-      if (window.innerWidth > 768) {
+      if (
+        window.innerWidth > 768
+      ) {
         setMobileOpen(false);
       }
     }
 
-    window.addEventListener('resize', handleResize);
+    window.addEventListener(
+      'resize',
+      handleResize,
+    );
 
     return () => {
       window.removeEventListener(
         'resize',
-        handleResize
+        handleResize,
       );
     };
   }, []);
 
+  /*
+  |--------------------------------------------------------------------------
+  | CLOSE MOBILE DRAWER
+  |--------------------------------------------------------------------------
+  */
+
   useEffect(() => {
     setMobileOpen(false);
   }, [location.pathname]);
+
+  /*
+  |--------------------------------------------------------------------------
+  | BODY SCROLL LOCK
+  |--------------------------------------------------------------------------
+  */
 
   useEffect(() => {
     if (!mobileOpen) {
@@ -79,9 +303,11 @@ function Sidebar({ view, user, onNavigate, onLogout }) {
     }
 
     const previousOverflow =
-      document.body.style.overflow;
+      document.body.style
+        .overflow;
 
-    document.body.style.overflow = 'hidden';
+    document.body.style.overflow =
+      'hidden';
 
     return () => {
       document.body.style.overflow =
@@ -90,40 +316,94 @@ function Sidebar({ view, user, onNavigate, onLogout }) {
   }, [mobileOpen]);
 
   /*
-   * Determine the current mobile page title.
-   */
+  |--------------------------------------------------------------------------
+  | MOBILE PAGE TITLE
+  |--------------------------------------------------------------------------
+  */
+
   function getCurrentViewLabel() {
+    if (
+      isManageArtistsRoute
+    ) {
+      return 'Manage Artists';
+    }
+
+    if (
+      isManageSongsRoute
+    ) {
+      return 'Manage Songs';
+    }
+
+    if (isAdminRoute) {
+      return 'Admin Dashboard';
+    }
+
+    if (isArtistRoute) {
+      return 'Artists';
+    }
+
     if (isAlbumRoute) {
       return 'Albums';
     }
 
-    if (view === 'manage-songs') {
-      return 'Manage Songs';
+    if (isDiscoverRoute) {
+      return 'Discover';
     }
 
-    if (view === 'admin') {
-      return 'Admin Dashboard';
+    if (isLibraryRoute) {
+      return 'Library';
+    }
+
+    if (isFavoritesRoute) {
+      return 'Favorites';
+    }
+
+    if (isSettingsRoute) {
+      return 'Settings';
+    }
+
+    if (isHomeRoute) {
+      return 'Home';
     }
 
     return (
       navItems.find(
-        (item) => item.view === view
+        (item) =>
+          item.view === view,
       )?.label || 'Aura'
     );
   }
 
+  /*
+  |--------------------------------------------------------------------------
+  | RENDER
+  |--------------------------------------------------------------------------
+  */
+
   return (
     <>
+      {/* ==================================================
+          SIDEBAR
+      ================================================== */}
+
       <aside
         className={`sidebar${
-          mobileOpen ? ' mobile-open' : ''
+          mobileOpen
+            ? ' mobile-open'
+            : ''
         }`}
       >
+        {/* ==================================================
+            HEADER
+        ================================================== */}
+
         <div className="sidebar-header">
           <button
             className="brand brand-button"
             type="button"
-            onClick={() => navigateTo('home')}
+            onClick={() =>
+              navigateTo('home')
+            }
             aria-label="Aura home"
           >
             <span className="brand-mark">
@@ -147,6 +427,10 @@ function Sidebar({ view, user, onNavigate, onLogout }) {
           </button>
         </div>
 
+        {/* ==================================================
+            NAVIGATION
+        ================================================== */}
+
         <nav
           className="nav-list"
           aria-label="Primary"
@@ -155,38 +439,55 @@ function Sidebar({ view, user, onNavigate, onLogout }) {
             Menu
           </div>
 
-          {navItems.map((item) => (
-            <button
-              key={item.view}
-              type="button"
-              className={getNavClass(
-                item.view
-              )}
-              onClick={() =>
-                navigateTo(item.view)
-              }
-            >
-              <Icon name={item.icon} />
+          {navItems.map(
+            (item) => (
+              <button
+                key={item.view}
+                type="button"
+                className={getNavClass(
+                  item.view,
+                )}
+                onClick={() =>
+                  navigateTo(
+                    item.view,
+                  )
+                }
+              >
+                <Icon
+                  name={
+                    item.icon
+                  }
+                />
 
-              <span className="nav-label">
-                {item.label}
-              </span>
-            </button>
-          ))}
+                <span className="nav-label">
+                  {item.label}
+                </span>
+              </button>
+            ),
+          )}
 
-          {user?.role === 'ADMIN' ? (
+          {/* ==================================================
+              ADMINISTRATION
+          ================================================== */}
+
+          {user?.role ===
+          'ADMIN' ? (
             <>
               <div className="nav-section-label admin-section-label">
                 Administration
               </div>
 
+              {/* ADMIN DASHBOARD */}
+
               <button
                 type="button"
                 className={getNavClass(
-                  'admin'
+                  'admin',
                 )}
                 onClick={() =>
-                  navigateTo('admin')
+                  navigateTo(
+                    'admin',
+                  )
                 }
               >
                 <Icon name="user" />
@@ -196,13 +497,17 @@ function Sidebar({ view, user, onNavigate, onLogout }) {
                 </span>
               </button>
 
+              {/* MANAGE SONGS */}
+
               <button
                 type="button"
                 className={getNavClass(
-                  'manage-songs'
+                  'manage-songs',
                 )}
                 onClick={() =>
-                  navigateTo('manage-songs')
+                  navigateTo(
+                    'manage-songs',
+                  )
                 }
               >
                 <Icon name="music" />
@@ -211,27 +516,58 @@ function Sidebar({ view, user, onNavigate, onLogout }) {
                   Manage Songs
                 </span>
               </button>
+
+              {/* MANAGE ARTISTS */}
+
+              <button
+                type="button"
+                className={getNavClass(
+                  'manage-artists',
+                )}
+                onClick={() =>
+                  navigateTo(
+                    'manage-artists',
+                  )
+                }
+              >
+                <Icon name="user" />
+
+                <span className="nav-label">
+                  Manage Artists
+                </span>
+              </button>
             </>
           ) : null}
         </nav>
+
+        {/* ==================================================
+            ACCOUNT
+        ================================================== */}
 
         <div className="account-panel">
           <div
             className="account-avatar"
             aria-hidden="true"
           >
-            {(user?.email || 'U')
+            {(
+              user?.email ||
+              'U'
+            )
               .charAt(0)
               .toUpperCase()}
           </div>
 
           <div className="account-info">
-            <small title={user?.email}>
-              {user?.email || 'User'}
+            <small
+              title={user?.email}
+            >
+              {user?.email ||
+                'User'}
             </small>
 
             <span>
-              {user?.role === 'ADMIN'
+              {user?.role ===
+              'ADMIN'
                 ? 'Administrator'
                 : 'Listener'}
             </span>
@@ -240,14 +576,22 @@ function Sidebar({ view, user, onNavigate, onLogout }) {
           <button
             className="sign-out-button"
             type="button"
-            onClick={handleLogout}
+            onClick={
+              handleLogout
+            }
           >
             <Icon name="logout" />
 
-            <span>Sign out</span>
+            <span>
+              Sign out
+            </span>
           </button>
         </div>
       </aside>
+
+      {/* ==================================================
+          MOBILE HEADER
+      ================================================== */}
 
       <header className="mobile-sidebar-bar">
         <button
@@ -257,7 +601,9 @@ function Sidebar({ view, user, onNavigate, onLogout }) {
             setMobileOpen(true)
           }
           aria-label="Open navigation"
-          aria-expanded={mobileOpen}
+          aria-expanded={
+            mobileOpen
+          }
         >
           <span />
           <span />
@@ -276,13 +622,19 @@ function Sidebar({ view, user, onNavigate, onLogout }) {
             A
           </span>
 
-          <span>Aura</span>
+          <span>
+            Aura
+          </span>
         </button>
 
         <span className="mobile-current-view">
           {getCurrentViewLabel()}
         </span>
       </header>
+
+      {/* ==================================================
+          MOBILE BACKDROP
+      ================================================== */}
 
       {mobileOpen ? (
         <button

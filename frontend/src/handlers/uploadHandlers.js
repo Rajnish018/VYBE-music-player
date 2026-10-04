@@ -1,240 +1,79 @@
-import {
-  parseBlob,
-  selectCover,
-} from 'music-metadata';
-
 import { adminApi } from '../api';
 
 import {
   emptyTrackMetadata,
   inferTrackMetadata,
+  readEmbeddedMetadata,
 } from '../utils/metadata';
 
 /**
- * Convert embedded artwork bytes to a browser
- * previewable data URL.
+ * ============================================================
+ * DURATION
+ * ============================================================
+ *
+ * Frontend:
+ *   "3:33"
+ *
+ * Backend:
+ *   213
+ *
+ * Keep the UI value as M:SS.
+ * Convert to seconds ONLY when creating FormData.
  */
-function bytesToDataUrl(data, mimeType) {
-  if (!data || !data.length) {
-    return '';
+
+function durationToSeconds(value) {
+  if (!value) {
+    return 0;
   }
 
-  const bytes =
-    data instanceof Uint8Array
-      ? data
-      : new Uint8Array(data);
+  const text = String(value).trim();
 
-  let binary = '';
+  const parts = text.split(':');
 
-  const chunkSize = 0x8000;
+  if (parts.length !== 2) {
+    return 0;
+  }
 
-  for (
-    let index = 0;
-    index < bytes.length;
-    index += chunkSize
+  const minutes = Number(parts[0]);
+  const seconds = Number(parts[1]);
+
+  if (
+    !Number.isFinite(minutes) ||
+    !Number.isFinite(seconds) ||
+    minutes < 0 ||
+    seconds < 0 ||
+    seconds >= 60
   ) {
-    const chunk = bytes.subarray(
-      index,
-      Math.min(
-        index + chunkSize,
-        bytes.length,
-      ),
-    );
-
-    binary += String.fromCharCode(
-      ...chunk,
-    );
+    return 0;
   }
 
-  return `data:${
-    mimeType || 'image/jpeg'
-  };base64,${btoa(binary)}`;
+  return minutes * 60 + seconds;
 }
 
 /**
- * Read actual embedded metadata from
- * the selected audio file.
+ * ============================================================
+ * HANDLE AUDIO FILE SELECTION
+ * ============================================================
  */
-async function readEmbeddedMetadata(file) {
-  console.log(
-    '[AUDIO METADATA] Reading:',
-    file.name,
-  );
 
-  const metadata = await parseBlob(
-    file,
-    {
-      duration: true,
-
-      /*
-       * IMPORTANT:
-       * We need embedded pictures.
-       */
-      skipCovers: false,
-    },
-  );
-
-  console.log(
-    '[AUDIO METADATA] Full:',
-    metadata,
-  );
-
-  console.log(
-    '[AUDIO METADATA] Common:',
-    metadata.common,
-  );
-
-  console.log(
-    '[AUDIO METADATA] Pictures:',
-    metadata.common?.picture,
-  );
-
-  const common =
-    metadata?.common || {};
-
-  const format =
-    metadata?.format || {};
-
-  /*
-   * Select the best available cover.
-   *
-   * For your MP3 this should select
-   * the Front Cover / APIC artwork.
-   */
-  const cover = selectCover(
-    common.picture || [],
-  );
-
-  console.log(
-    '[AUDIO METADATA] Selected cover:',
-    cover,
-  );
-
-  /*
-   * =============================
-   * TEXT METADATA
-   * =============================
-   */
-
-  const title =
-    common.title?.trim() || '';
-
-  const artist =
-    common.artist?.trim() ||
-    common.artists?.[0]?.trim() ||
-    '';
-
-  const album =
-    common.album?.trim() || '';
-
-  const genre =
-    Array.isArray(common.genre)
-      ? common.genre[0]?.trim() || ''
-      : common.genre?.trim() || '';
-
-  const year =
-    common.year
-      ? String(common.year)
-      : '';
-
-  const duration =
-    Number.isFinite(format.duration)
-      ? String(
-          Math.max(
-            1,
-            Math.round(
-              format.duration,
-            ),
-          ),
-        )
-      : '';
-
-  /*
-   * =============================
-   * EMBEDDED ARTWORK
-   * =============================
-   */
-
-  const artworkData =
-    cover?.data || null;
-
-  const artworkMimeType =
-    cover?.format || '';
-
-  const artworkSize =
-    artworkData?.byteLength || 0;
-
-  const thumbnailUrl =
-    artworkData && artworkMimeType
-      ? bytesToDataUrl(
-          artworkData,
-          artworkMimeType,
-        )
-      : '';
-
-  const artworkType =
-    cover?.type ||
-    'Cover (front)';
-
-  const hasArtwork =
-    Boolean(
-      artworkData &&
-      artworkData.length > 0,
-    );
-
-  console.log(
-    '[AUDIO ARTWORK]',
-    {
-      hasArtwork,
-      type: artworkType,
-      format: artworkMimeType,
-      size: artworkSize,
-    },
-  );
-
-  return {
-    title,
-    artist,
-    album,
-    genre,
-    year,
-    duration,
-
-    thumbnailUrl,
-
-    hasArtwork,
-
-    artworkMimeType,
-
-    artworkSize,
-
-    artworkType,
-
-    /*
-     * No custom file yet.
-     */
-    artworkFile: null,
-
-    artworkWidth: 0,
-    artworkHeight: 0,
-  };
-}
-
-/**
- * Handle selecting an audio file.
- */
 export async function handleAdminFileChange({
   file,
   setUploadFile,
   setUploadForm,
   setUploadState,
 }) {
+  /*
+   * Store selected file.
+   */
   setUploadFile(file);
 
+  /*
+   * No file selected.
+   */
   if (!file) {
-    setUploadForm(
-      emptyTrackMetadata,
-    );
+    setUploadForm({
+      ...emptyTrackMetadata,
+    });
 
     setUploadState('');
 
@@ -242,99 +81,105 @@ export async function handleAdminFileChange({
   }
 
   /*
-   * Filename fallback.
+   * Clear old metadata immediately.
+   */
+  setUploadForm({
+    ...emptyTrackMetadata,
+  });
+
+  setUploadState(
+    'Reading embedded audio metadata...',
+  );
+
+  /*
+   * Filename metadata is ONLY the fallback.
    *
-   * Used only when embedded metadata
-   * does not contain a value.
+   * Embedded metadata is handled by metadata.js.
    */
   const fallbackMetadata =
     inferTrackMetadata(file);
 
-  setUploadForm(
-    fallbackMetadata,
-  );
-
-  setUploadState(
-    'Reading audio metadata...',
-  );
-
   try {
     /*
-     * Read actual ID3 / MP4 metadata.
+     * IMPORTANT:
+     *
+     * Do not parse the audio here.
+     *
+     * metadata.js is the single source of truth
+     * for metadata extraction and cleaning.
      */
     const metadata =
-      await readEmbeddedMetadata(
-        file,
-      );
+      await readEmbeddedMetadata(file);
 
     /*
-     * Embedded metadata takes priority
-     * over filename metadata.
+     * Embedded metadata gets priority.
      */
-    setUploadForm((current) => ({
-      ...current,
+    setUploadForm({
+      ...fallbackMetadata,
 
       title:
         metadata.title ||
-        current.title,
+        fallbackMetadata.title,
 
       artist:
         metadata.artist ||
-        current.artist,
+        fallbackMetadata.artist,
 
       album:
         metadata.album ||
-        current.album ||
+        fallbackMetadata.album ||
         'Single',
 
       genre:
-        metadata.genre ||
-        '',
+        metadata.genre || '',
 
       year:
-        metadata.year ||
-        '',
+        metadata.year || '',
 
+      /*
+       * IMPORTANT:
+       *
+       * metadata.duration should already be:
+       *
+       * "3:33"
+       *
+       * Do NOT convert it here.
+       */
       duration:
         metadata.duration ||
-        current.duration,
+        fallbackMetadata.duration,
 
       thumbnailUrl:
-        metadata.thumbnailUrl ||
-        '',
+        metadata.thumbnailUrl || '',
 
       hasArtwork:
-        metadata.hasArtwork,
+        Boolean(metadata.hasArtwork),
 
       artworkMimeType:
-        metadata.artworkMimeType ||
-        '',
+        metadata.artworkMimeType || '',
 
       artworkSize:
-        metadata.artworkSize ||
-        0,
+        metadata.artworkSize || 0,
 
       artworkType:
-        metadata.artworkType ||
-        '',
+        metadata.artworkType || '',
 
       artworkFile:
         null,
 
-      artworkWidth: 0,
+      artworkWidth:
+        metadata.artworkWidth || 0,
 
-      artworkHeight: 0,
-    }));
+      artworkHeight:
+        metadata.artworkHeight || 0,
+    });
 
     /*
-     * =============================
-     * STATUS
-     * =============================
+     * Status message.
      */
-
     if (metadata.hasArtwork) {
       const sizeKB =
-        metadata.artworkSize /
+        Number(metadata.artworkSize || 0) /
         1024;
 
       setUploadState(
@@ -349,15 +194,19 @@ export async function handleAdminFileChange({
     }
   } catch (error) {
     console.error(
-      '[ADMIN METADATA]',
+      '[ADMIN METADATA] FAILED:',
       error,
     );
 
     /*
      * Parser failed.
      *
-     * Keep filename metadata.
+     * Use filename metadata.
      */
+    setUploadForm(
+      fallbackMetadata,
+    );
+
     setUploadState(
       'Could not read embedded metadata. Using filename information.',
     );
@@ -374,22 +223,31 @@ export async function handleAdminFileChange({
     audio.src = objectUrl;
 
     audio.onloadedmetadata = () => {
-      const seconds = Math.max(
+      const totalSeconds = Math.max(
         1,
-        Math.round(
-          audio.duration || 0,
-        ),
+        Math.round(audio.duration || 0),
       );
 
-      URL.revokeObjectURL(
-        objectUrl,
-      );
+      const minutes =
+        Math.floor(totalSeconds / 60);
+
+      const seconds =
+        totalSeconds % 60;
+
+      /*
+       * Keep frontend format as M:SS.
+       */
+      const formatted =
+        `${minutes}:${String(seconds).padStart(
+          2,
+          '0',
+        )}`;
+
+      URL.revokeObjectURL(objectUrl);
 
       setUploadForm((current) => ({
         ...current,
-
-        duration:
-          String(seconds),
+        duration: formatted,
       }));
 
       setUploadState(
@@ -398,9 +256,7 @@ export async function handleAdminFileChange({
     };
 
     audio.onerror = () => {
-      URL.revokeObjectURL(
-        objectUrl,
-      );
+      URL.revokeObjectURL(objectUrl);
 
       setUploadState(
         'Could not read audio metadata. Try another audio file.',
@@ -412,8 +268,11 @@ export async function handleAdminFileChange({
 }
 
 /**
- * Upload track.
+ * ============================================================
+ * UPLOAD TRACK
+ * ============================================================
  */
+
 export async function uploadTrack({
   event,
   token,
@@ -425,16 +284,26 @@ export async function uploadTrack({
   setUploadForm,
   setUploadFile,
   refreshLibrary,
+  onTrackUploaded,
   logout,
 }) {
   event.preventDefault();
 
+  /*
+   * Prevent double submission.
+   */
   if (uploading) {
     return;
   }
 
   const formElement =
     event.currentTarget;
+
+  /*
+   * ==========================================================
+   * BASIC VALIDATION
+   * ==========================================================
+   */
 
   if (!token || !uploadFile) {
     setUploadState(
@@ -456,41 +325,109 @@ export async function uploadTrack({
     return;
   }
 
+  /*
+   * ==========================================================
+   * CONVERT FRONTEND DURATION
+   * ==========================================================
+   *
+   * Frontend:
+   *
+   *   "3:33"
+   *
+   * Backend:
+   *
+   *   213
+   */
+
+  const durationSeconds =
+    durationToSeconds(
+      uploadForm.duration,
+    );
+
+  if (!durationSeconds) {
+    setUploadState(
+      'Invalid duration. Please wait for the audio metadata to finish reading.',
+    );
+
+    return;
+  }
+
+  /*
+   * ==========================================================
+   * START UPLOAD
+   * ==========================================================
+   */
+
   setUploading(true);
 
   setUploadState(
     'Uploading to MEGA...',
   );
 
+  /*
+   * IMPORTANT:
+   *
+   * FormData MUST be created BEFORE formData.append().
+   */
   const formData =
     new FormData();
 
   /*
-   * Metadata fields that should NOT be
-   * converted into strings and appended.
+   * ==========================================================
+   * PREVIEW-ONLY FIELDS
+   * ==========================================================
    */
-  const previewOnlyFields = new Set([
-    'thumbnailUrl',
-    'hasArtwork',
-    'artworkMimeType',
-    'artworkSize',
-    'artworkType',
-    'artworkFile',
-    'artworkWidth',
-    'artworkHeight',
-  ]);
+
+  const previewOnlyFields =
+    new Set([
+      'thumbnailUrl',
+      'hasArtwork',
+      'artworkMimeType',
+      'artworkSize',
+      'artworkType',
+      'artworkFile',
+      'artworkWidth',
+      'artworkHeight',
+    ]);
 
   /*
-   * Add normal metadata.
+   * ==========================================================
+   * ADD METADATA
+   * ==========================================================
    */
+
   Object.entries(uploadForm).forEach(
     ([key, value]) => {
+      /*
+       * Ignore frontend-only artwork fields.
+       */
       if (
         previewOnlyFields.has(key)
       ) {
         return;
       }
 
+      /*
+       * Duration is the special case.
+       *
+       * Frontend:
+       *   "3:33"
+       *
+       * Backend:
+       *   "213"
+       */
+      if (key === 'duration') {
+        formData.append(
+          'duration',
+          String(durationSeconds),
+        );
+
+        return;
+      }
+
+      /*
+       * Ignore empty values.
+       */
       if (
         value !== undefined &&
         value !== null &&
@@ -505,30 +442,27 @@ export async function uploadTrack({
   );
 
   /*
-   * =============================
-   * ORIGINAL AUDIO
-   * =============================
+   * ==========================================================
+   * AUDIO
+   * ==========================================================
    */
+
   formData.append(
     'audio',
     uploadFile,
   );
 
   /*
-   * =============================
+   * ==========================================================
    * CUSTOM COVER
-   * =============================
+   * ==========================================================
    *
-   * If admin selected:
+   * If user selected a custom cover,
+   * send it as "cover".
    *
-   * Edit detected metadata
-   *      ↓
-   * Cover image
-   *      ↓
-   * Replace cover
-   *
-   * send that image separately.
+   * Otherwise backend uses embedded artwork.
    */
+
   if (
     uploadForm.artworkFile instanceof File
   ) {
@@ -542,8 +476,10 @@ export async function uploadTrack({
       {
         name:
           uploadForm.artworkFile.name,
+
         type:
           uploadForm.artworkFile.type,
+
         size:
           uploadForm.artworkFile.size,
       },
@@ -551,25 +487,43 @@ export async function uploadTrack({
   }
 
   /*
-   * Debug FormData.
+   * ==========================================================
+   * DEBUG
+   * ==========================================================
    */
+
   console.log(
-    '[UPLOAD] Metadata:',
+    '[UPLOAD] Final metadata being sent:',
     {
       title:
         uploadForm.title,
+
       artist:
         uploadForm.artist,
+
       album:
         uploadForm.album,
+
       genre:
         uploadForm.genre,
+
       year:
         uploadForm.year,
-      duration:
+
+      /*
+       * What user sees.
+       */
+      durationDisplay:
         uploadForm.duration,
+
+      /*
+       * What backend receives.
+       */
+      durationSeconds,
+
       hasEmbeddedArtwork:
         uploadForm.hasArtwork,
+
       hasCustomArtwork:
         Boolean(
           uploadForm.artworkFile,
@@ -577,17 +531,36 @@ export async function uploadTrack({
     },
   );
 
+  /*
+   * ==========================================================
+   * SEND TO BACKEND
+   * ==========================================================
+   */
+
   try {
-    await adminApi.uploadTrack(
-      formData,
-      token,
-    );
+    const result =
+      await adminApi.uploadTrack(
+        formData,
+        token,
+      );
 
-    await refreshLibrary();
+    /*
+     * Add returned track immediately.
+     */
+    if (result?.track) {
+      onTrackUploaded?.(
+        result.track,
+      );
+    } else {
+      await refreshLibrary();
+    }
 
-    setUploadForm(
-      emptyTrackMetadata,
-    );
+    /*
+     * Reset form.
+     */
+    setUploadForm({
+      ...emptyTrackMetadata,
+    });
 
     setUploadFile(null);
 
@@ -597,10 +570,22 @@ export async function uploadTrack({
       'Uploaded and ready to play.',
     );
   } catch (error) {
+    /*
+     * ========================================================
+     * AUTHENTICATION
+     * ========================================================
+     */
+
     if (error?.status === 401) {
       logout();
       return;
     }
+
+    /*
+     * ========================================================
+     * DUPLICATE TRACK
+     * ========================================================
+     */
 
     if (
       error?.status === 409 &&
@@ -614,6 +599,30 @@ export async function uploadTrack({
       return;
     }
 
+    /*
+     * ========================================================
+     * OPERATION IN PROGRESS
+     * ========================================================
+     */
+
+    if (
+      error?.status === 409 &&
+      error?.code ===
+        'TRACK_OPERATION_IN_PROGRESS'
+    ) {
+      setUploadState(
+        'Another operation is already in progress for this track.',
+      );
+
+      return;
+    }
+
+    /*
+     * ========================================================
+     * BAD REQUEST
+     * ========================================================
+     */
+
     if (error?.status === 400) {
       setUploadState(
         error.message ||
@@ -623,6 +632,12 @@ export async function uploadTrack({
       return;
     }
 
+    /*
+     * ========================================================
+     * FORBIDDEN
+     * ========================================================
+     */
+
     if (error?.status === 403) {
       setUploadState(
         'You do not have permission to upload tracks.',
@@ -630,6 +645,12 @@ export async function uploadTrack({
 
       return;
     }
+
+    /*
+     * ========================================================
+     * FILE TOO LARGE
+     * ========================================================
+     */
 
     if (error?.status === 413) {
       setUploadState(
@@ -639,13 +660,27 @@ export async function uploadTrack({
       return;
     }
 
-    if (error?.status >= 500) {
+    /*
+     * ========================================================
+     * SERVER ERROR
+     * ========================================================
+     */
+
+    if (
+      error?.status >= 500
+    ) {
       setUploadState(
         'Upload failed. Please try again.',
       );
 
       return;
     }
+
+    /*
+     * ========================================================
+     * OTHER ERROR
+     * ========================================================
+     */
 
     setUploadState(
       error?.message ||
