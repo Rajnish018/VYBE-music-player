@@ -688,11 +688,12 @@ function validateEnvironment() {
   }
 
   const required = [
-    'JWT_SECRET',
-    'DATABASE_URL',
-    'REDIS_URL',
-    'CORS_ORIGINS',
-  ];
+  'JWT_SECRET',
+  'DATABASE_URL',
+  'UPSTASH_REDIS_REST_URL',
+  'UPSTASH_REDIS_REST_TOKEN',
+  'CORS_ORIGINS',
+];
 
   const missing =
     required.filter(
@@ -812,7 +813,6 @@ async function bootstrap() {
 
     server = app.listen(
       PORT,
-      '0.0.0.0',
       () => {
         console.log('');
 
