@@ -875,188 +875,65 @@ async function checkYtDlp(): Promise<boolean> {
   }
 }
 
-async function isYoutubeBotError(error: any): Promise<boolean> {
-  const message = [
-    error?.message || '',
-    error?.stderr || '',
-    error?.stdout || '',
-  ]
-    .join('\n')
-    .toLowerCase();
-
-  return (
-    message.includes("sign in to confirm you're not a bot") ||
-    message.includes('sign in to confirm you’re not a bot') ||
-    message.includes('confirm you are not a bot') ||
-    message.includes('confirm you’re not a bot') ||
-    message.includes('http error 403') ||
-    message.includes('403 forbidden') ||
-    message.includes('bot check')
-  );
-}
-
-let youtubeRecoveryRunning = false;
-
-async function recoverYoutubeProvider(): Promise<void> {
-  if (youtubeRecoveryRunning) {
-    console.log('[YouTube Recovery] Recovery already running...');
-    return;
-  }
-
-  youtubeRecoveryRunning = true;
-
-  try {
-    console.log('');
-    console.log('========================================');
-    console.log('[YouTube Recovery] Starting recovery');
-    console.log('========================================');
-
-    const home =
-      process.env.HOME ||
-      process.env.USERPROFILE ||
-      '/tmp';
-
-    const providerDir = `${home}/bgutil-ytdlp-pot-provider`;
-
-    /*
-     * Make sure the provider exists.
-     */
-    try {
-      await execFileAsync(
-        'git',
-        [
-          'rev-parse',
-          '--is-inside-work-tree',
-        ],
-        {
-          cwd: providerDir,
-          timeout: 10000,
-        },
-      );
-
-      console.log('[YouTube Recovery] Provider exists');
-    } catch {
-      console.log('[YouTube Recovery] Provider missing');
-
-      await execFileAsync(
-        'git',
-        [
-          'clone',
-          '--single-branch',
-          '--branch',
-          '2.0.0',
-          'https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git',
-          providerDir,
-        ],
-        {
-          timeout: 120000,
-        },
-      );
-    }
-
-    /*
-     * Rebuild provider.
-     */
-    console.log('[YouTube Recovery] Installing provider dependencies...');
-
-    await execFileAsync(
-      'npm',
-      ['ci'],
-      {
-        cwd: `${providerDir}/server`,
-        timeout: 180000,
-        maxBuffer: 20 * 1024 * 1024,
-      },
-    );
-
-    console.log('[YouTube Recovery] Building provider...');
-
-    await execFileAsync(
-      'npx',
-      ['tsc'],
-      {
-        cwd: `${providerDir}/server`,
-        timeout: 120000,
-        maxBuffer: 20 * 1024 * 1024,
-      },
-    );
-
-    /*
-     * Reinstall/update plugin.
-     */
-    console.log('[YouTube Recovery] Updating PO token plugin...');
-
-    await execFileAsync(
-      'python3',
-      [
-        '-m',
-        'pip',
-        'install',
-        '--user',
-        '--upgrade',
-        'bgutil-ytdlp-pot-provider',
-      ],
-      {
-        timeout: 180000,
-        maxBuffer: 20 * 1024 * 1024,
-      },
-    );
-
-    console.log(
-      '[YouTube Recovery] Provider recovery completed',
-    );
-  } finally {
-    youtubeRecoveryRunning = false;
-  }
-}
 
 async function resolveWithYtDlp(
   videoId: string,
   quality: 'low' | 'medium' | 'high' = 'high',
 ): Promise<YoutubeAudioStream> {
-const command = getYtDlpCommand();
-
+  const command = getYtDlpCommand();
   const url = youtubeWatchUrl(videoId);
 
-  /* Do not force mweb. Let yt-dlp choose the available YouTube client. */
-  const format = quality === 'low'
-    ? 'worstaudio/worst'
-    : 'bestaudio/best';
+  const format =
+    quality === 'low'
+      ? 'worstaudio/worst'
+      : 'bestaudio/best';
 
-  const runYtDlp = async (): Promise<YoutubeAudioStream> => {
-    console.log(`[YouTube] Running yt-dlp: ${format}`);
+  console.log('[YouTube] yt-dlp path:', command);
+  console.log(`[YouTube] Running yt-dlp: ${format}`);
 
-    const args: string[] = [
-      '--js-runtimes', 'node',
-      '--no-playlist',
-      '--no-warnings',
-      '--skip-download',
-      '-f', format,
-      '--get-url',
-      url,
-    ];
+  const args: string[] = [
+    '--js-runtimes',
+    'node',
 
-    // Intentionally no --extractor-args youtube:player-client=mweb.
+    '--no-playlist',
+    '--no-warnings',
+    '--skip-download',
+
+    '-f',
+    format,
+
+    '--get-url',
+
+    url,
+  ];
+
+  try {
     const result = await execFileAsync(command, args, {
       timeout: 60000,
       maxBuffer: 10 * 1024 * 1024,
     });
 
     const stdout = String(result.stdout || '').trim();
+
     const streamUrl = stdout
       .split(/\r?\n/)
       .map((line) => line.trim())
-      .find((line) =>
-        line.startsWith('http://') ||
-        line.startsWith('https://'),
+      .find(
+        (line) =>
+          line.startsWith('http://') ||
+          line.startsWith('https://'),
       );
 
     if (!streamUrl) {
-      throw new Error('yt-dlp did not return stream URL');
+      throw new Error(
+        'yt-dlp did not return a stream URL',
+      );
     }
 
     const parsedUrl = new URL(streamUrl);
+
     let mimeType = 'audio/webm';
+
     const mime = parsedUrl.searchParams.get('mime');
 
     if (mime && mime.startsWith('audio/')) {
@@ -1072,38 +949,24 @@ const command = getYtDlpCommand();
       codec: null,
       source: 'yt-dlp',
     };
-  };
-
-  try {
-    return await runYtDlp();
   } catch (error: any) {
-    console.error('[YouTube] yt-dlp failed:', error?.message);
+    console.error(
+      '[YouTube] yt-dlp failed:',
+      error?.message,
+    );
 
-    const shouldRecover = await isYoutubeBotError(error);
-    if (!shouldRecover) {
-      throw error;
-    }
+    /*
+     * IMPORTANT:
+     *
+     * Do NOT install, clone, rebuild, or update
+     * the bgutil provider here.
+     *
+     * The provider is installed and compiled
+     * during the Render build and started by
+     * start-production.sh.
+     */
 
-    console.log('[YouTube] Bot/authentication error detected');
-    console.log('[YouTube] Starting automatic recovery...');
-
-    try {
-      await recoverYoutubeProvider();
-    } catch (recoveryError: any) {
-      console.error('[YouTube Recovery] Failed:', recoveryError?.message);
-      throw error;
-    }
-
-    console.log('[YouTube] Retrying yt-dlp after recovery...');
-
-    try {
-      const recovered = await runYtDlp();
-      console.log('[YouTube] Recovery retry succeeded');
-      return recovered;
-    } catch (retryError: any) {
-      console.error('[YouTube] Recovery retry failed:', retryError?.message);
-      throw retryError;
-    }
+    throw error;
   }
 }
 export async function resolveYouTubeAudio(
