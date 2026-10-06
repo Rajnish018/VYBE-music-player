@@ -32,7 +32,6 @@
     "multer": "^1.4.5-lts.1",
     "music-metadata": "^11.16.0",
     "pg": "^8.11.3",
-    "redis": "^6.3.0",
     "youtubei.js": "^18.1.0"
   },
   "devDependencies": {

@@ -1,95 +1,48 @@
-import {
-  createClient,
-  RedisClientType,
-} from 'redis';
-
-
-const REDIS_URL = process.env.REDIS_URL;
+import redis from '../config/redis';
 
 class RedisService {
-  private client: RedisClientType | null =
-    null;
+  private disabled =
+    process.env.REDIS_DISABLED === 'true';
 
-  private connecting:
-    | Promise<RedisClientType | null>
-    | null = null;
-
-  private get url() {
+  private isAvailable(): boolean {
     return (
-      process.env.REDIS_URL 
+      !this.disabled &&
+      Boolean(
+        process.env.UPSTASH_REDIS_REST_URL &&
+        process.env.UPSTASH_REDIS_REST_TOKEN,
+      )
     );
   }
 
-  private async getClient() {
-    if (
-      process.env.REDIS_DISABLED === 'true'
-    ) {
+  async getJson<T>(
+    key: string,
+  ): Promise<T | null> {
+    if (!this.isAvailable()) {
       return null;
     }
 
-    if (this.client?.isOpen) {
-      return this.client;
-    }
-
-    if (this.connecting) {
-      return this.connecting;
-    }
-
-    this.connecting = (async () => {
-      try {
-        const client = createClient({
-          url: this.url,
-        }) as RedisClientType;
-
-        client.on(
-          'error',
-          (error) => {
-            console.warn(
-              'Redis error:',
-              error?.message || error,
-            );
-          },
-        );
-
-        await client.connect();
-
-        this.client = client;
-
-        return client;
-      } catch (error: any) {
-        console.warn(
-          'Redis unavailable; falling back to PostgreSQL:',
-          error?.message || error,
-        );
-
-        this.client = null;
-
-        return null;
-      } finally {
-        this.connecting = null;
-      }
-    })();
-
-    return this.connecting;
-  }
-
-  async getJson<T>(key: string) {
     try {
-      const client =
-        await this.getClient();
-
-      if (!client) {
-        return null;
-      }
-
       const value =
-        await client.get(key);
+        await redis.get<T>(key);
 
-      if (!value) {
+      if (
+        value === null ||
+        value === undefined
+      ) {
         return null;
       }
 
-      return JSON.parse(value) as T;
+      // Upstash may return a parsed object
+      // or a string depending on the stored value.
+      if (typeof value === 'string') {
+        try {
+          return JSON.parse(value) as T;
+        } catch {
+          return value as T;
+        }
+      }
+
+      return value;
     } catch (error: any) {
       console.warn(
         `Redis get failed for ${key}:`,
@@ -104,20 +57,17 @@ class RedisService {
     key: string,
     value: unknown,
     ttlSeconds: number,
-  ) {
+  ): Promise<void> {
+    if (!this.isAvailable()) {
+      return;
+    }
+
     try {
-      const client =
-        await this.getClient();
-
-      if (!client) {
-        return;
-      }
-
-      await client.set(
+      await redis.set(
         key,
         JSON.stringify(value),
         {
-          EX: ttlSeconds,
+          ex: ttlSeconds,
         },
       );
     } catch (error: any) {
@@ -128,23 +78,21 @@ class RedisService {
     }
   }
 
-  async del(...keys: string[]) {
+  async del(
+    ...keys: string[]
+  ): Promise<void> {
     const safeKeys =
       keys.filter(Boolean);
 
-    if (safeKeys.length === 0) {
+    if (
+      safeKeys.length === 0 ||
+      !this.isAvailable()
+    ) {
       return;
     }
 
     try {
-      const client =
-        await this.getClient();
-
-      if (!client) {
-        return;
-      }
-
-      await client.del(safeKeys);
+      await redis.del(...safeKeys);
     } catch (error: any) {
       console.warn(
         'Redis delete failed:',
@@ -153,27 +101,31 @@ class RedisService {
     }
   }
 
-  async delByPattern(pattern: string) {
+  async delByPattern(
+    pattern: string,
+  ): Promise<void> {
+    if (!this.isAvailable()) {
+      return;
+    }
+
     try {
-      const client =
-        await this.getClient();
+      let cursor = 0;
 
-      if (!client) {
-        return;
-      }
+      do {
+        const result =
+          await redis.scan(cursor, {
+            match: pattern,
+            count: 100,
+          });
 
-      const keys: string[] = [];
+        cursor = Number(result[0]);
 
-      for await (const key of client.scanIterator({
-        MATCH: pattern,
-        COUNT: 100,
-      })) {
-        keys.push(String(key));
-      }
+        const keys = result[1];
 
-      if (keys.length > 0) {
-        await client.del(keys);
-      }
+        if (keys.length > 0) {
+          await redis.del(...keys);
+        }
+      } while (cursor !== 0);
     } catch (error: any) {
       console.warn(
         `Redis pattern delete failed for ${pattern}:`,
@@ -189,7 +141,9 @@ export const redisService =
 export const redisKeys = {
   tracksAll: 'tracks:all:v1',
 
-  favoritesForUser(userId: string) {
+  favoritesForUser(
+    userId: string,
+  ) {
     return `favorites:user:${userId}:v1`;
   },
 };
