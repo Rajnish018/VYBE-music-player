@@ -92,6 +92,20 @@ fi
 
 echo "[YouTube] PO-token provider health check passed"
 
+# --------------------------------------------------
+# Verify yt-dlp
+# --------------------------------------------------
+
+echo "[YouTube] yt-dlp path:"
+command -v yt-dlp
+
+echo "[YouTube] yt-dlp version:"
+yt-dlp --version
+
+# --------------------------------------------------
+# Diagnostic: test bgutil HTTP provider
+# --------------------------------------------------
+
 echo "[YouTube] Testing bgutil HTTP provider..."
 
 yt-dlp \
@@ -107,12 +121,6 @@ echo "[YouTube] bgutil diagnostic finished"
 # --------------------------------------------------
 # Verify yt-dlp PO-token provider discovery
 # --------------------------------------------------
-
-echo "[YouTube] yt-dlp path:"
-command -v yt-dlp
-
-echo "[YouTube] yt-dlp version:"
-yt-dlp --version
 
 echo "[YouTube] Checking PO-token provider discovery..."
 
