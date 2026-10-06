@@ -855,7 +855,9 @@ async function resolveWithYtDlp(
   videoId: string,
   quality: 'low' | 'medium' | 'high' = 'high',
 ): Promise<YoutubeAudioStream> {
-  const command = process.env.YTDLP_COMMAND || 'yt-dlp';
+ const command =
+  process.env.YTDLP_COMMAND ||
+  path.resolve(process.cwd(), 'bin', 'yt-dlp');
   const url = youtubeWatchUrl(videoId);
 
   /* Do not force mweb. Let yt-dlp choose the available YouTube client. */
