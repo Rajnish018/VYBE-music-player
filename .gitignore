@@ -196,3 +196,23 @@ service-account.json
 *.p12
 *.pfx
 backend/src/routes/adminTracks.ts.backup-*
+
+# ==========================================
+# YouTube / yt-dlp runtime
+# ==========================================
+youtube-provider/
+**/youtube-provider/
+
+bin/yt-dlp
+**/bin/yt-dlp
+
+cookies.txt
+**/cookies.txt
+*.cookies
+**/*.cookies
+
+# ==========================================
+# Backup source files
+# ==========================================
+*.backup-*
+*.backup.*

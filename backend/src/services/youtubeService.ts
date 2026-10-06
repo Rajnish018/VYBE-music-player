@@ -7,6 +7,13 @@ import {
 } from 'youtubei.js';
 import path from 'node:path';
 
+
+
+import redis from '../config/redis';
+import {
+  acquireLock,
+  releaseLock,
+} from './distributedLock';
 const execFileAsync = promisify(execFile);
 
 
@@ -63,6 +70,151 @@ export interface YoutubeAudioStream {
   | 'yt-dlp';
 }
 
+
+function getYtDlpCommand(): string {
+  return process.env.YTDLP_COMMAND || 'yt-dlp';
+}
+
+/* =========================================================
+ * YOUTUBE STREAM CACHE
+ * ========================================================= */
+
+const YOUTUBE_STREAM_CACHE_TTL = 180; // 3 minutes
+
+type CachedYoutubeAudio = {
+  url: string;
+  mimeType: string | null;
+  bitrate: number | null;
+  contentLength: number | null;
+  itag: number | null;
+  codec: string | null;
+  source:
+    | 'youtubei-direct'
+    | 'youtubei-decipher'
+    | 'yt-dlp';
+};
+
+function getYoutubeStreamCacheKey(
+  videoId: string,
+  quality: 'low' | 'medium' | 'high',
+): string {
+  return `youtube:stream:${videoId}:${quality}`;
+}
+
+async function getCachedYoutubeAudio(
+  videoId: string,
+  quality: 'low' | 'medium' | 'high',
+): Promise<YoutubeAudioStream | null> {
+  const key = getYoutubeStreamCacheKey(videoId, quality);
+
+  try {
+    const cached = await redis.get<CachedYoutubeAudio>(key);
+
+    if (!cached?.url) {
+      console.log(
+        `[YouTube Cache] MISS ${videoId} (${quality})`,
+      );
+
+      return null;
+    }
+
+    console.log(
+      `[YouTube Cache] HIT ${videoId} (${quality})`,
+    );
+
+    return {
+      url: cached.url,
+      mimeType: cached.mimeType ?? null,
+      bitrate: cached.bitrate ?? null,
+      contentLength: cached.contentLength ?? null,
+      itag: cached.itag ?? null,
+      codec: cached.codec ?? null,
+      source: cached.source,
+    };
+  } catch (error: any) {
+    // Cache failure must NEVER break YouTube playback.
+    console.warn(
+      `[YouTube Cache] GET failed for ${videoId}:`,
+      error?.message,
+    );
+
+    return null;
+  }
+}
+
+async function cacheYoutubeAudio(
+  videoId: string,
+  quality: 'low' | 'medium' | 'high',
+  stream: YoutubeAudioStream,
+): Promise<void> {
+  const key = getYoutubeStreamCacheKey(videoId, quality);
+
+  try {
+    await redis.set(
+      key,
+      {
+        url: stream.url,
+        mimeType: stream.mimeType,
+        bitrate: stream.bitrate,
+        contentLength: stream.contentLength,
+        itag: stream.itag,
+        codec: stream.codec,
+        source: stream.source,
+      },
+      {
+        ex: YOUTUBE_STREAM_CACHE_TTL,
+      },
+    );
+
+    console.log(
+      `[YouTube Cache] STORED ${videoId} (${quality}) TTL=${YOUTUBE_STREAM_CACHE_TTL}s`,
+    );
+  } catch (error: any) {
+    // Cache failure must NEVER break YouTube playback.
+    console.warn(
+      `[YouTube Cache] SET failed for ${videoId}:`,
+      error?.message,
+    );
+  }
+}
+
+export async function invalidateYoutubeAudioCache(
+  videoId: string,
+  quality: 'low' | 'medium' | 'high',
+): Promise<void> {
+  const key = getYoutubeStreamCacheKey(videoId, quality);
+
+  try {
+    await redis.del(key);
+
+    console.log(
+      `[YouTube Cache] INVALIDATED ${videoId} (${quality})`,
+    );
+  } catch (error: any) {
+    console.warn(
+      `[YouTube Cache] DELETE failed for ${videoId}:`,
+      error?.message,
+    );
+  }
+}
+
+
+const YOUTUBE_RESOLUTION_LOCK_TTL = 60;
+const YOUTUBE_RESOLUTION_LOCK_WAIT_MS = 500;
+const YOUTUBE_RESOLUTION_LOCK_MAX_WAIT_MS = 30_000;
+
+function getYoutubeResolutionLockKey(
+  videoId: string,
+  quality: 'low' | 'medium' | 'high',
+): string {
+  return `lock:youtube:resolve:${videoId}:${quality}`;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
 /* =========================================================
    YOUTUBE CLIENT
 ========================================================= */
@@ -683,9 +835,7 @@ async function tryYoutubeiStream(
 ========================================================= */
 
 async function checkYtDlp(): Promise<boolean> {
-  const command =
-    process.env.YTDLP_COMMAND ||
-    path.resolve(process.cwd(), 'bin', 'yt-dlp');
+  const command = getYtDlpCommand();
 
   try {
     const result = await execFileAsync(
@@ -864,7 +1014,7 @@ async function resolveWithYtDlp(
   videoId: string,
   quality: 'low' | 'medium' | 'high' = 'high',
 ): Promise<YoutubeAudioStream> {
- const command = process.env.YTDLP_COMMAND || path.resolve(process.cwd(), 'bin', 'yt-dlp');
+const command = getYtDlpCommand();
 
   const url = youtubeWatchUrl(videoId);
 
@@ -956,7 +1106,6 @@ async function resolveWithYtDlp(
     }
   }
 }
-
 export async function resolveYouTubeAudio(
   videoId: string,
   quality:
@@ -964,57 +1113,224 @@ export async function resolveYouTubeAudio(
     | 'medium'
     | 'high' = 'high',
 ): Promise<YoutubeAudioStream> {
-  const cleanId =
-    extractYouTubeVideoId(
-      videoId,
-    );
+  const cleanId = extractYouTubeVideoId(videoId);
 
   if (!cleanId) {
-    throw new Error(
-      'Invalid YouTube video ID',
-    );
+    throw new Error('Invalid YouTube video ID');
   }
 
   /*
-   * First:
-   * youtubei.js
+   * ---------------------------------------------------------
+   * 1. Fast Redis cache lookup
+   * ---------------------------------------------------------
    */
-  try {
-    const youtubeiStream =
-      await tryYoutubeiStream(
+
+  const cached = await getCachedYoutubeAudio(
+    cleanId,
+    quality,
+  );
+
+  if (cached?.url) {
+    return cached;
+  }
+
+  /*
+   * ---------------------------------------------------------
+   * 2. Distributed resolution lock
+   *
+   * Only ONE backend instance/request is allowed to run
+   * youtubei.js / yt-dlp for this video + quality.
+   * ---------------------------------------------------------
+   */
+
+  const lockKey = getYoutubeResolutionLockKey(
+    cleanId,
+    quality,
+  );
+
+  const startedAt = Date.now();
+
+  let lockToken: string | null = null;
+
+  while (
+    Date.now() - startedAt <
+    YOUTUBE_RESOLUTION_LOCK_MAX_WAIT_MS
+  ) {
+    lockToken = await acquireLock(
+      lockKey,
+      YOUTUBE_RESOLUTION_LOCK_TTL,
+    );
+
+    /*
+     * We acquired the lock.
+     */
+    if (lockToken) {
+      console.log(
+        `[YouTube Lock] ACQUIRED ${cleanId} (${quality})`,
+      );
+
+      break;
+    }
+
+    /*
+     * Another request is already resolving this video.
+     *
+     * Wait for it to populate Redis instead of running
+     * yt-dlp ourselves.
+     */
+
+    console.log(
+      `[YouTube Lock] WAIT ${cleanId} (${quality})`,
+    );
+
+    await sleep(
+      YOUTUBE_RESOLUTION_LOCK_WAIT_MS,
+    );
+
+    /*
+     * Check Redis again after waiting.
+     */
+
+    const resolvedByAnotherRequest =
+      await getCachedYoutubeAudio(
         cleanId,
         quality,
       );
 
-    if (
-      youtubeiStream?.url
-    ) {
-      return youtubeiStream;
+    if (resolvedByAnotherRequest?.url) {
+      console.log(
+        `[YouTube Lock] RESOLVED BY OTHER REQUEST ${cleanId} (${quality})`,
+      );
+
+      return resolvedByAnotherRequest;
     }
-  } catch (error: any) {
-    console.log(
-      '[YouTube] youtubei failed:',
-      error?.message,
-    );
   }
 
   /*
-   * Second:
-   * yt-dlp
+   * ---------------------------------------------------------
+   * 3. Prevent an endless wait
+   * ---------------------------------------------------------
    */
-  const ytDlpAvailable =
-    await checkYtDlp();
 
-  if (!ytDlpAvailable) {
+  if (!lockToken) {
     throw new Error(
-      'yt-dlp is not available',
+      'YouTube stream resolution is already in progress. Please retry shortly.',
     );
   }
 
-  return resolveWithYtDlp(
-    cleanId,
-    quality,
-  );
+  try {
+    /*
+     * IMPORTANT:
+     *
+     * The cache may have been populated between our first
+     * cache check and acquiring the lock.
+     *
+     * Always check Redis again after acquiring the lock.
+     */
+
+    const cachedAfterLock =
+      await getCachedYoutubeAudio(
+        cleanId,
+        quality,
+      );
+
+    if (cachedAfterLock?.url) {
+      console.log(
+        `[YouTube Lock] CACHE FILLED BEFORE RESOLUTION ${cleanId} (${quality})`,
+      );
+
+      return cachedAfterLock;
+    }
+
+    /*
+     * -------------------------------------------------------
+     * 4. Resolve fresh stream
+     * -------------------------------------------------------
+     */
+
+    let resolved: YoutubeAudioStream | null = null;
+
+    /*
+     * First: youtubei.js
+     */
+
+    try {
+      const youtubeiStream =
+        await tryYoutubeiStream(
+          cleanId,
+          quality,
+        );
+
+      if (youtubeiStream?.url) {
+        resolved = youtubeiStream;
+      }
+    } catch (error: any) {
+      console.log(
+        '[YouTube] youtubei failed:',
+        error?.message,
+      );
+    }
+
+    /*
+     * Second: yt-dlp
+     */
+
+    if (!resolved) {
+      const ytDlpAvailable =
+        await checkYtDlp();
+
+      if (!ytDlpAvailable) {
+        throw new Error(
+          'yt-dlp is not available',
+        );
+      }
+
+      resolved =
+        await resolveWithYtDlp(
+          cleanId,
+          quality,
+        );
+    }
+
+    /*
+     * -------------------------------------------------------
+     * 5. Store fresh signed URL in Redis
+     * -------------------------------------------------------
+     */
+
+    await cacheYoutubeAudio(
+      cleanId,
+      quality,
+      resolved,
+    );
+
+    return resolved;
+  } finally {
+    /*
+     * -------------------------------------------------------
+     * 6. Release lock safely
+     *
+     * releaseLock verifies the token, so one request cannot
+     * accidentally release another request's lock.
+     * -------------------------------------------------------
+     */
+
+    try {
+      await releaseLock(
+        lockKey,
+        lockToken,
+      );
+
+      console.log(
+        `[YouTube Lock] RELEASED ${cleanId} (${quality})`,
+      );
+    } catch (error: any) {
+      console.error(
+        `[YouTube Lock] RELEASE FAILED ${cleanId} (${quality}):`,
+        error?.message,
+      );
+    }
+  }
 }
 
 /* =========================================================

@@ -1,19 +1,21 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response as ExpressResponse } from 'express';
 import { Readable } from 'node:stream';
+
 
 import { prisma } from '../config/db';
 
 import {
   extractYouTubeVideoId,
   resolveYouTubeAudio,
+  invalidateYoutubeAudioCache,
   youtubeService,
 } from '../services/youtubeService';
-
 import {
   deduplicationService,
   normalizeTitle,
   normalizeArtist,
 } from '../services/deduplicationService';
+
 
 import { megaService } from '../services/megaService';
 import { authenticate } from '../middleware/auth';
@@ -29,7 +31,7 @@ const router = Router();
 router.post(
   '/youtube',
   authenticate,
-  async (req: Request, res: Response) => {
+  async (req: Request, res: ExpressResponse) => {
     try {
       const {
         url,
@@ -291,7 +293,7 @@ router.get(
   '/youtube/audio',
   async (
     req: Request,
-    res: Response,
+    res: ExpressResponse,
   ) => {
     try {
       /* ===================================================
@@ -378,28 +380,50 @@ router.get(
       );
 
       /* ===================================================
-         4. Forward Range header
+   4. Prepare upstream request
 
-         Required for:
-         - seeking
-         - next/previous position
-         - browser audio controls
-      =================================================== */
+   YouTube googlevideo URLs are temporary signed URLs.
+
+   IMPORTANT:
+   - Never persist the signed URL.
+   - Never send the signed URL to the frontend.
+   - Always request a fresh URL when the CDN rejects it.
+   - Preserve Range requests for seeking.
+=================================================== */
 
       const range =
         typeof req.headers.range === 'string'
-          ? req.headers.range
+          ? req.headers.range.trim()
           : undefined;
 
       const upstreamHeaders: Record<string, string> = {
+        /*
+         * Use a stable browser-like User-Agent.
+         */
         'User-Agent':
-          req.headers['user-agent'] ||
-          'Mozilla/5.0',
+          'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+
+        /*
+         * YouTube audio CDN accepts normal wildcard audio requests.
+         */
+        Accept: '*/*',
+
+        /*
+         * IMPORTANT:
+         *
+         * Do not allow compression here.
+         * We are proxying byte ranges and need the original
+         * audio byte stream.
+         */
+        'Accept-Encoding': 'identity',
+
+        /*
+         * Keep the request similar to a normal YouTube request.
+         */
       };
 
       if (range) {
-        upstreamHeaders.Range =
-          range;
+        upstreamHeaders.Range = range;
 
         console.log(
           `[YouTube Audio] Range: ${range}`,
@@ -407,25 +431,170 @@ router.get(
       }
 
       /* ===================================================
+         Helper: request YouTube CDN
+      =================================================== */
+      const fetchUpstream = async (
+        streamUrl: string,
+        range?: string,
+      ): Promise<globalThis.Response> => {
+        const headers: Record<string, string> = {
+          'User-Agent': 'Mozilla/5.0',
+        };
+
+        if (range) {
+          headers.Range = range;
+        }
+
+        return fetch(streamUrl, {
+          method: 'GET',
+          headers,
+        });
+      };
+      /* ===================================================
          5. Request YouTube CDN
+      
+         Normal flow:
+      
+         resolveYouTubeAudio()
+                ↓
+         googlevideo URL
+                ↓
+             fetch()
+                ↓
+            200 / 206
+      
+         Recovery flow:
+      
+         googlevideo URL
+                ↓
+              403/410
+                ↓
+         resolveYouTubeAudio()
+                ↓
+         NEW googlevideo URL
+                ↓
+             fetch()
+                ↓
+            200 / 206
       =================================================== */
 
-      const upstream =
-        await fetch(
-          stream.url,
-          {
-            method: 'GET',
-            headers:
-              upstreamHeaders,
-          },
-        );
+      let upstream = await fetchUpstream(
+        stream.url,
+        range,
+      );
 
       console.log(
         `[YouTube Audio] Upstream status: ${upstream.status}`,
       );
 
+      /*
+       * This flag is only for logging/debugging.
+       *
+       * We allow exactly ONE refresh attempt.
+       */
+      let retried = false;
+
       /* ===================================================
-         6. Validate upstream
+         5A. Refresh expired/rejected signed URL
+      
+         YouTube may return 403/410 when the temporary
+         googlevideo URL is expired or rejected.
+      
+         NEVER endlessly retry.
+      =================================================== */
+
+      if (
+        upstream.status === 403 ||
+        upstream.status === 410
+      ) {
+        retried = true;
+
+        console.warn(
+          `[YouTube Audio] CDN returned ${upstream.status}; invalidating cached URL...`,
+        );
+
+        try {
+          await upstream.body?.cancel();
+        } catch {
+          // Ignore cancellation errors.
+        }
+
+        try {
+          /*
+           * The cached signed URL is no longer usable.
+           * Remove it before resolving a new one.
+           */
+          await invalidateYoutubeAudioCache(
+            videoId,
+            quality,
+          );
+
+          /*
+           * Resolve a completely new signed URL.
+           */
+          const refreshedStream =
+            await resolveYouTubeAudio(
+              videoId,
+              quality,
+            );
+
+          if (
+            !refreshedStream ||
+            !refreshedStream.url
+          ) {
+            console.error(
+              '[YouTube Audio] Fresh resolver returned no URL',
+            );
+
+            return res.status(502).json({
+              error:
+                'Unable to refresh YouTube audio stream',
+            });
+          }
+
+          console.log(
+            `[YouTube Audio] Fresh URL resolved using ${refreshedStream.source}`,
+          );
+
+          upstream =
+            await fetchUpstream(
+              refreshedStream.url,
+              range,
+            );
+
+          console.log(
+            `[YouTube Audio] Retry upstream status: ${upstream.status}`,
+          );
+
+          if (refreshedStream.mimeType) {
+            stream.mimeType =
+              refreshedStream.mimeType;
+          }
+        } catch (refreshError) {
+          console.error(
+            '[YouTube Audio] Fresh URL resolution failed:',
+            refreshError,
+          );
+
+          return res.status(502).json({
+            error:
+              'Unable to refresh YouTube audio stream',
+
+            message:
+              refreshError instanceof Error
+                ? refreshError.message
+                : 'Unknown refresh error',
+          });
+        }
+      }
+
+      /* ===================================================
+         6. Validate upstream response
+      
+         200 = complete response
+         206 = Range response
+      
+         Anything else is considered an upstream failure.
       =================================================== */
 
       if (
@@ -447,9 +616,10 @@ router.get(
 
           upstreamStatusText:
             upstream.statusText,
+
+          retried,
         });
       }
-
       /* ===================================================
          7. Content-Type
       =================================================== */

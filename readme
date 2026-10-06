@@ -171,3 +171,103 @@ Request B ─────┘
           └─────────┬─────────┘
                     ▼
              Aura Player
+
+
+Range request
+     │
+     ▼
+Redis cache
+     │
+ ┌───┴────┐
+ HIT     MISS
+  │        │
+  │      acquire lock
+  │        │
+  │      ┌─┴─────────┐
+  │      │           │
+  │    winner      waiters
+  │      │           │
+  │    yt-dlp        │
+  │      │           │
+  │    Redis SET ────┘
+  │
+  ▼
+googlevideo URL
+     │
+     ▼
+YouTube CDN
+     │
+     ▼
+206 Range
+
+
+Request Range 0
+       │
+       ▼
+Redis cache?
+   │ YES ───────────────► use cached URL
+   │
+   NO
+   │
+   ▼
+Acquire Redis lock
+   │
+   ├── acquired
+   │       │
+   │       ▼
+   │   Run yt-dlp once
+   │       │
+   │       ▼
+   │   Store URL in Redis
+   │       │
+   │       ▼
+   │   Release lock
+   │
+   └── lock unavailable
+           │
+           ▼
+       Wait briefly
+           │
+           ▼
+       Check Redis again
+           │
+           ▼
+       Use URL created
+       by first request
+
+
+
+
+
+            YouTube request
+                       │
+                       ▼
+              Redis cache lookup
+                 │           │
+              HIT            MISS
+               │              │
+               │              ▼
+               │       Redis distributed lock
+               │              │
+               │         ┌────┴────┐
+               │         │         │
+               │       owner     waiter
+               │         │         │
+               │         ▼         │
+               │      yt-dlp       │
+               │         │         │
+               │         ▼         │
+               │    Redis STORE ◄──┘
+               │         │
+               └─────────┬┘
+                         ▼
+                 Signed YouTube URL
+                         │
+                         ▼
+                    Range request
+                         │
+                         ▼
+                  YouTube 206 response
+                         │
+                         ▼
+                    VYBE player
