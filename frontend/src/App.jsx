@@ -38,10 +38,8 @@ import { useLibrary } from './hooks/useLibrary';
 import { useSettings } from './hooks/useSettings';
 import { useAppStore } from './store/appStore';
 
-import {
-  PlayerProvider,
-  usePlayer,
-} from './context/PlayerContext';
+import { PlayerProvider } from './context/PlayerContext';
+import { usePlayer } from './context/usePlayer';
 
 import AdminRoute from './routes/AdminRoute';
 import PrivateRoute from './routes/PrivateRoute';

@@ -1082,7 +1082,12 @@ export class YoutubeService {
 
             youtubeId: videoId,
 
-            playable: true,
+            /*
+             * Search results only identify the YouTube video.
+             * The backend audio resolver must validate an actual
+             * playable stream before playback is considered ready.
+             */
+            playable: false,
           },
         ];
       } catch {
@@ -1202,10 +1207,11 @@ export class YoutubeService {
         youtubeId: id,
 
         /*
-         * Playback is handled by
-         * our backend audio resolver.
+         * Search results do not guarantee that an audio stream
+         * can currently be resolved. Playback is handled by the
+         * backend audio resolver when the user actually plays it.
          */
-        playable: true,
+        playable: false,
       });
 
       if (
@@ -1376,3 +1382,4 @@ function getThumbnailFromInfo(
 
 export const youtubeService =
   new YoutubeService();
+  
