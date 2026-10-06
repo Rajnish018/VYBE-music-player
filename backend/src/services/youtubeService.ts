@@ -5,6 +5,7 @@ import {
   Innertube,
   UniversalCache,
 } from 'youtubei.js';
+import path from 'node:path';
 
 const execFileAsync = promisify(execFile);
 
@@ -855,9 +856,8 @@ async function resolveWithYtDlp(
   videoId: string,
   quality: 'low' | 'medium' | 'high' = 'high',
 ): Promise<YoutubeAudioStream> {
- const command =
-  process.env.YTDLP_COMMAND ||
-  path.resolve(process.cwd(), 'bin', 'yt-dlp');
+ const command = process.env.YTDLP_COMMAND || path.resolve(process.cwd(), 'bin', 'yt-dlp');
+
   const url = youtubeWatchUrl(videoId);
 
   /* Do not force mweb. Let yt-dlp choose the available YouTube client. */
@@ -1384,4 +1384,3 @@ function getThumbnailFromInfo(
 
 export const youtubeService =
   new YoutubeService();
-  
