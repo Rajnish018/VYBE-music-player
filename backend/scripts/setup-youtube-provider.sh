@@ -57,7 +57,7 @@ if [ ! -f "$PROVIDER_DIR/server/package.json" ]; then
 
     git clone \
         --depth 1 \
-        --branch 2.0.0 \
+        --branch 2.0.1 \
         https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git \
         "$PROVIDER_DIR"
 else
