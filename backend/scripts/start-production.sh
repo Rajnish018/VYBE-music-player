@@ -92,6 +92,40 @@ fi
 
 echo "[YouTube] PO-token provider health check passed"
 
+echo "[YouTube] Testing bgutil HTTP provider..."
+
+yt-dlp \
+    --verbose \
+    --skip-download \
+    --simulate \
+    --js-runtimes node \
+    "https://www.youtube.com/watch?v=S7tYeUBgGHU" \
+    2>&1 | tee /tmp/ytdlp-provider-test.log || true
+
+echo "[YouTube] bgutil diagnostic finished"
+
+# --------------------------------------------------
+# Verify yt-dlp PO-token provider discovery
+# --------------------------------------------------
+
+echo "[YouTube] yt-dlp path:"
+command -v yt-dlp
+
+echo "[YouTube] yt-dlp version:"
+yt-dlp --version
+
+echo "[YouTube] Checking PO-token provider discovery..."
+
+yt-dlp \
+    --verbose \
+    --skip-download \
+    --simulate \
+    --js-runtimes node \
+    "https://www.youtube.com/watch?v=gdGUeX1i0n0" \
+    2>&1 | grep -E \
+    "PO Token Providers|bgutil|JS Challenge Providers" \
+    || true
+
 # --------------------------------------------------
 # Start VYBE backend
 # --------------------------------------------------
