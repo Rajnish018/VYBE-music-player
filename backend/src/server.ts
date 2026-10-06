@@ -245,21 +245,30 @@ app.use(rateLimiter);
  * ENABLE_LOCAL_UPLOADS=true
  */
 
-if (
-  process.env.ENABLE_LOCAL_UPLOADS ===
-  'true'
-) {
-  app.use(
-    '/uploads',
-    express.static(
-      path.resolve(
-        process.cwd(),
-        'uploads',
-      ),
-    ),
-  );
-}
+// if (
+//   process.env.ENABLE_LOCAL_UPLOADS ===
+//   'true'
+// ) {
+//   app.use(
+//     '/uploads',
+//     express.static(
+//       path.resolve(
+//         process.cwd(),
+//         'uploads',
+//       ),
+//     ),
+//   );
+// }
 
+const uploadsPath = path.resolve(
+  process.cwd(),
+  'uploads',
+);
+
+app.use(
+  '/uploads',
+  express.static(uploadsPath),
+);
 /* =========================================================
    LIVENESS HEALTH CHECK
 ========================================================= */
