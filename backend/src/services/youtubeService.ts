@@ -685,32 +685,40 @@ async function tryYoutubeiStream(
 async function checkYtDlp(): Promise<boolean> {
   const command =
     process.env.YTDLP_COMMAND ||
-    'yt-dlp';
+    path.resolve(process.cwd(), 'bin', 'yt-dlp');
 
   try {
-    const result =
-      await execFileAsync(
-        command,
-        ['--version'],
-        {
-          timeout: 10000,
-        },
-      );
+    const result = await execFileAsync(
+      command,
+      ['--version'],
+      {
+        timeout: 10000,
+      },
+    );
 
     const version =
-      String(
-        result.stdout || '',
-      ).trim();
+      String(result.stdout || '').trim();
 
     console.log(
       '[YouTube] yt-dlp:',
       version,
     );
 
+    console.log(
+      '[YouTube] yt-dlp path:',
+      command,
+    );
+
     return true;
-  } catch {
+  } catch (error: any) {
     console.error(
-      '[YouTube] yt-dlp is not installed or not in PATH',
+      '[YouTube] yt-dlp check failed:',
+      error?.message,
+    );
+
+    console.error(
+      '[YouTube] yt-dlp path:',
+      command,
     );
 
     return false;
