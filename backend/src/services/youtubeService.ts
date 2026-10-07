@@ -96,7 +96,48 @@ type CachedYoutubeAudio = {
     | 'youtubei-decipher'
     | 'yt-dlp';
 };
+async function debugAndroidFormats(
+  videoId: string,
+  cookieArgs: string[],
+): Promise<void> {
+  try {
+    const args = [
+      '--js-runtimes',
+      'node',
+      '--no-playlist',
+      '--no-warnings',
+      ...cookieArgs,
+      '--extractor-args',
+      'youtube:player_client=android',
+      '-F',
+      `https://www.youtube.com/watch?v=${videoId}`,
+    ];
 
+    const { stdout, stderr } = await execFileAsync(
+      getYtDlpCommand(),
+      args,
+      {
+        timeout: 60_000,
+        maxBuffer: 10 * 1024 * 1024,
+      },
+    );
+
+    console.log(
+      `[YouTube DEBUG] Android formats ${videoId}:\n${stdout}`,
+    );
+
+    if (stderr) {
+      console.log(
+        `[YouTube DEBUG] Android stderr ${videoId}:\n${stderr}`,
+      );
+    }
+  } catch (error: any) {
+    console.error(
+      `[YouTube DEBUG] Android format inspection failed ${videoId}:`,
+      error?.message,
+    );
+  }
+}
 async function prepareYtDlpCookies(): Promise<{
   args: string[];
   cleanup: () => Promise<void>;
@@ -981,10 +1022,23 @@ async function resolveWithYtDlp(
       itag: 18,
       codec: 'avc1.42001E/mp4a.40.2',
     };
+  } catch (error: any) {
+    if (
+      playerClient === 'android' &&
+      process.env.YTDLP_DEBUG_FORMATS === 'true'
+    ) {
+      await debugAndroidFormats(
+        videoId,
+        cookies.args,
+      );
+    }
+
+    throw error;
   } finally {
     await cookies.cleanup();
   }
 }
+
 export async function resolveYouTubeAudio(
   videoId: string,
   quality:
@@ -1600,6 +1654,154 @@ export class YoutubeService {
       duration,
     };
   }
+}
+async function debugYoutubeConnection(
+  videoId: string,
+  cookieArgs: string[],
+): Promise<void> {
+  const youtubeUrl =
+    `https://www.youtube.com/watch?v=${videoId}`;
+
+  console.log(
+    `\n========== YOUTUBE RENDER DIAGNOSTIC: ${videoId} ==========`,
+  );
+
+  // ---------------------------------------------------------
+  // 1. yt-dlp version
+  // ---------------------------------------------------------
+  try {
+    const version = await execFileAsync(
+      getYtDlpCommand(),
+      ['--version'],
+      {
+        timeout: 10_000,
+      },
+    );
+
+    console.log(
+      `[YT DEBUG] yt-dlp version: ${String(version.stdout).trim()}`,
+    );
+
+    console.log(
+      `[YT DEBUG] yt-dlp command: ${getYtDlpCommand()}`,
+    );
+  } catch (error: any) {
+    console.error(
+      '[YT DEBUG] yt-dlp unavailable:',
+      error?.message,
+    );
+
+    return;
+  }
+
+  // ---------------------------------------------------------
+  // 2. Direct YouTube connectivity
+  // ---------------------------------------------------------
+  try {
+    const response = await fetch(youtubeUrl, {
+      method: 'HEAD',
+      redirect: 'follow',
+    });
+
+    console.log(
+      `[YT DEBUG] YouTube HTTPS status: ${response.status}`,
+    );
+
+    console.log(
+      `[YT DEBUG] YouTube final URL: ${response.url}`,
+    );
+  } catch (error: any) {
+    console.error(
+      '[YT DEBUG] YouTube HTTPS connection failed:',
+      error?.message,
+    );
+  }
+
+  // ---------------------------------------------------------
+  // 3. Default client formats
+  // ---------------------------------------------------------
+  try {
+    const args = [
+      '--js-runtimes',
+      'node',
+      '--no-playlist',
+      '--no-warnings',
+      ...cookieArgs,
+      '-F',
+      youtubeUrl,
+    ];
+
+    const { stdout, stderr } =
+      await execFileAsync(
+        getYtDlpCommand(),
+        args,
+        {
+          timeout: 60_000,
+          maxBuffer: 10 * 1024 * 1024,
+        },
+      );
+
+    console.log(
+      `[YT DEBUG] DEFAULT CLIENT FORMATS:\n${stdout}`,
+    );
+
+    if (stderr) {
+      console.log(
+        `[YT DEBUG] DEFAULT CLIENT STDERR:\n${stderr}`,
+      );
+    }
+  } catch (error: any) {
+    console.error(
+      '[YT DEBUG] Default client format check failed:',
+      error?.message,
+    );
+  }
+
+  // ---------------------------------------------------------
+  // 4. Android client formats
+  // ---------------------------------------------------------
+  try {
+    const args = [
+      '--js-runtimes',
+      'node',
+      '--no-playlist',
+      '--no-warnings',
+      ...cookieArgs,
+      '--extractor-args',
+      'youtube:player_client=android',
+      '-F',
+      youtubeUrl,
+    ];
+
+    const { stdout, stderr } =
+      await execFileAsync(
+        getYtDlpCommand(),
+        args,
+        {
+          timeout: 60_000,
+          maxBuffer: 10 * 1024 * 1024,
+        },
+      );
+
+    console.log(
+      `[YT DEBUG] ANDROID FORMATS:\n${stdout}`,
+    );
+
+    if (stderr) {
+      console.log(
+        `[YT DEBUG] ANDROID STDERR:\n${stderr}`,
+      );
+    }
+  } catch (error: any) {
+    console.error(
+      '[YT DEBUG] Android format check failed:',
+      error?.message,
+    );
+  }
+
+  console.log(
+    `========== END YOUTUBE RENDER DIAGNOSTIC: ${videoId} ==========\n`,
+  );
 }
 
 /* =========================================================
