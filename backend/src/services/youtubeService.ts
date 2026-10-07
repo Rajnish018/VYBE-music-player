@@ -908,21 +908,24 @@ async function checkYtDlp(): Promise<boolean> {
     return false;
   }
 }
-
 async function resolveWithYtDlp(
   videoId: string,
   quality: 'low' | 'medium' | 'high',
-  playerClient?: 'android'
+  playerClient?: 'android',
 ): Promise<YoutubeAudioStream> {
   const url = `https://www.youtube.com/watch?v=${videoId}`;
 
   const cookies = await prepareYtDlpCookies();
 
   try {
+    // Android client currently exposes format 18 for videos such as
+    // O5gwxm3NxFU in the tested YouTube session.
     const format =
-      quality === 'low'
-        ? 'worstaudio/worst'
-        : 'bestaudio/best';
+      playerClient === 'android'
+        ? '18'
+        : quality === 'low'
+          ? 'worstaudio/worst'
+          : 'bestaudio/best';
 
     const args: string[] = [
       '--js-runtimes',
@@ -935,7 +938,7 @@ async function resolveWithYtDlp(
     if (playerClient) {
       args.push(
         '--extractor-args',
-        `youtube:player_client=${playerClient}`
+        `youtube:player_client=${playerClient}`,
       );
     }
 
@@ -944,11 +947,11 @@ async function resolveWithYtDlp(
       '-f',
       format,
       '--get-url',
-      url
+      url,
     );
 
     console.log(
-      `[YouTube] yt-dlp client=${playerClient ?? 'default'} format=${format}`
+      `[YouTube] yt-dlp client=${playerClient ?? 'default'} format=${format}`,
     );
 
     const { stdout } = await execFileAsync(
@@ -957,13 +960,13 @@ async function resolveWithYtDlp(
       {
         timeout: 60_000,
         maxBuffer: 10 * 1024 * 1024,
-      }
+      },
     );
 
     const mediaUrl = stdout
       .split(/\r?\n/)
-      .map(line => line.trim())
-      .find(line => /^https?:\/\//i.test(line));
+      .map((line) => line.trim())
+      .find((line) => /^https?:\/\//i.test(line));
 
     if (!mediaUrl) {
       throw new Error('yt-dlp returned no media URL');
@@ -972,13 +975,11 @@ async function resolveWithYtDlp(
     return {
       url: mediaUrl,
       source: 'yt-dlp',
-      mimeType: mediaUrl.includes('.mp4')
-        ? 'video/mp4'
-        : 'audio/mp4',
+      mimeType: 'video/mp4',
       bitrate: null,
       contentLength: null,
-      itag: null,
-      codec: null,
+      itag: 18,
+      codec: 'avc1.42001E/mp4a.40.2',
     };
   } finally {
     await cookies.cleanup();
