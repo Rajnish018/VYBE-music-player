@@ -1153,23 +1153,92 @@ export async function resolveYouTubeAudio(
      * Second: yt-dlp
      */
 
-    if (!resolved) {
-      const ytDlpAvailable =
-        await checkYtDlp();
+   /*
+ * =======================================================
+ * STRATEGY 2
+ * NORMAL YT-DLP
+ * =======================================================
+ */
 
-      if (!ytDlpAvailable) {
-        throw new Error(
-          'yt-dlp is not available',
-        );
-      }
+if (!resolved) {
+  const ytDlpAvailable = await checkYtDlp();
 
-      resolved =
-        await resolveWithYtDlp(
-          cleanId,
-          quality,
-        );
-    }
+  if (!ytDlpAvailable) {
+    throw new Error('yt-dlp is not available');
+  }
 
+  try {
+    console.log(
+      `[YouTube] Trying yt-dlp default client ${cleanId}`,
+    );
+
+    resolved = await resolveWithYtDlp(
+      cleanId,
+      quality,
+    );
+
+    console.log(
+      `[YouTube] yt-dlp default SUCCESS ${cleanId}`,
+    );
+  } catch (error: any) {
+    console.warn(
+      `[YouTube] yt-dlp default failed ${cleanId}:`,
+      error?.message,
+    );
+
+    /*
+     * IMPORTANT:
+     *
+     * Do NOT throw here.
+     *
+     * Continue to Android fallback below.
+     */
+  }
+}
+
+
+/*
+ * =======================================================
+ * STRATEGY 3
+ * ANDROID PLAYER CLIENT FALLBACK
+ * =======================================================
+ */
+
+if (!resolved) {
+  try {
+    console.log(
+      `[YouTube] Retrying with Android player client ${cleanId}`,
+    );
+
+    resolved = await resolveWithYtDlp(
+      cleanId,
+      quality,
+      'android',
+    );
+
+    console.log(
+      `[YouTube] Android yt-dlp SUCCESS ${cleanId}`,
+    );
+  } catch (error: any) {
+    console.error(
+      `[YouTube] Android yt-dlp failed ${cleanId}:`,
+      error?.message,
+    );
+  }
+}
+
+
+/*
+ * =======================================================
+ * FINAL FAILURE
+ * =======================================================
+ */
+
+if (!resolved?.url) {
+  throw new Error(
+    `Unable to resolve a playable YouTube stream for ${cleanId}`,
+  );
+}
     /*
      * -------------------------------------------------------
      * 5. Store fresh signed URL in Redis
