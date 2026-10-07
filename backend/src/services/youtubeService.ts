@@ -6,6 +6,9 @@ import {
   UniversalCache,
 } from 'youtubei.js';
 import path from 'node:path';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import crypto from 'node:crypto';
 
 
 
@@ -94,15 +97,36 @@ type CachedYoutubeAudio = {
     | 'yt-dlp';
 };
 
-function getYtDlpCookiesArgs(): string[] {
+async function prepareYtDlpCookies(): Promise<{
+  args: string[];
+  cleanup: () => Promise<void>;
+}> {
   const cookiesFile = process.env.YTDLP_COOKIES_FILE;
 
   if (!cookiesFile) {
-    return [];
+    return {
+      args: [],
+      cleanup: async () => {},
+    };
   }
 
-  return ['--cookies', cookiesFile];
-}
+  const tempCookiesFile = path.join(
+    os.tmpdir(),
+    `vybe-ytdlp-cookies-${crypto.randomUUID()}.txt`,
+  );
+
+  await fs.copyFile(cookiesFile, tempCookiesFile);
+
+  return {
+    args: ['--cookies', tempCookiesFile],
+
+    cleanup: async () => {
+      await fs
+        .rm(tempCookiesFile, { force: true })
+        .catch(() => {});
+    },
+  };
+} 
 
 function getYoutubeStreamCacheKey(
   videoId: string,
@@ -885,7 +909,6 @@ async function checkYtDlp(): Promise<boolean> {
   }
 }
 
-
 async function resolveWithYtDlp(
   videoId: string,
   quality: 'low' | 'medium' | 'high' = 'high',
@@ -901,18 +924,20 @@ async function resolveWithYtDlp(
   console.log('[YouTube] yt-dlp path:', command);
   console.log(`[YouTube] Running yt-dlp: ${format}`);
 
+  const cookies = await prepareYtDlpCookies();
+
   const args: string[] = [
-  '--js-runtimes', 'node',
-  '--no-playlist',
-  '--no-warnings',
-  '--skip-download',
+    '--js-runtimes', 'node',
+    '--no-playlist',
+    '--no-warnings',
+    '--skip-download',
 
-  ...getYtDlpCookiesArgs(),
+    ...cookies.args,
 
-  '-f', format,
-  '--get-url',
-  url,
-];
+    '-f', format,
+    '--get-url',
+    url,
+  ];
 
   try {
     const result = await execFileAsync(command, args, {
@@ -962,18 +987,9 @@ async function resolveWithYtDlp(
       error?.message,
     );
 
-    /*
-     * IMPORTANT:
-     *
-     * Do NOT install, clone, rebuild, or update
-     * the bgutil provider here.
-     *
-     * The provider is installed and compiled
-     * during the Render build and started by
-     * start-production.sh.
-     */
-
     throw error;
+  } finally {
+    await cookies.cleanup();
   }
 }
 export async function resolveYouTubeAudio(
