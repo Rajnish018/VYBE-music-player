@@ -1,5 +1,6 @@
 import { Router, Request, Response as ExpressResponse } from 'express';
 import { Readable } from 'node:stream';
+import { ProxyAgent } from 'undici';
 
 
 import { prisma } from '../config/db';
@@ -27,7 +28,13 @@ const router = Router();
 
    YouTube Share / Metadata / Deduplication
 ========================================================= */
+const youtubeProxy =
+  process.env.YOUTUBE_PROXY?.trim();
 
+const youtubeProxyAgent =
+  youtubeProxy
+    ? new ProxyAgent(youtubeProxy)
+    : null;
 router.post(
   '/youtube',
   authenticate,
@@ -438,16 +445,19 @@ router.get(
         range?: string,
       ): Promise<globalThis.Response> => {
         const headers: Record<string, string> = {
-          'User-Agent': 'Mozilla/5.0',
+          ...upstreamHeaders,
+          ...(range ? { Range: range } : {}),
         };
-
-        if (range) {
-          headers.Range = range;
-        }
 
         return fetch(streamUrl, {
           method: 'GET',
           headers,
+          redirect: 'follow',
+          ...(youtubeProxyAgent
+            ? {
+                dispatcher: youtubeProxyAgent as any,
+              }
+            : {}),
         });
       };
       /* ===================================================

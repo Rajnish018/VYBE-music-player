@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { ProxyAgent } from 'undici';
 
 import {
   Innertube,
@@ -72,7 +73,10 @@ export interface YoutubeAudioStream {
   | 'youtubei-decipher'
   | 'yt-dlp';
 }
-
+function getYoutubeProxy(): string | null {
+  const proxy = process.env.YOUTUBE_PROXY?.trim();
+  return proxy || null;
+}
 
 function getYtDlpCommand(): string {
   return process.env.YTDLP_COMMAND || 'yt-dlp';
@@ -92,9 +96,9 @@ type CachedYoutubeAudio = {
   itag: number | null;
   codec: string | null;
   source:
-    | 'youtubei-direct'
-    | 'youtubei-decipher'
-    | 'yt-dlp';
+  | 'youtubei-direct'
+  | 'youtubei-decipher'
+  | 'yt-dlp';
 };
 async function debugAndroidFormats(
   videoId: string,
@@ -147,7 +151,7 @@ async function prepareYtDlpCookies(): Promise<{
   if (!cookiesFile) {
     return {
       args: [],
-      cleanup: async () => {},
+      cleanup: async () => { },
     };
   }
 
@@ -164,10 +168,10 @@ async function prepareYtDlpCookies(): Promise<{
     cleanup: async () => {
       await fs
         .rm(tempCookiesFile, { force: true })
-        .catch(() => {});
+        .catch(() => { });
     },
   };
-} 
+}
 
 function getYoutubeStreamCacheKey(
   videoId: string,
@@ -983,14 +987,21 @@ async function resolveWithYtDlp(
       );
     }
 
+    const proxy = getYoutubeProxy();
+
     args.push(
       ...cookies.args,
+
+      ...(proxy
+        ? ['--proxy', proxy]
+        : []),
+
       '-f',
       format,
+
       '--get-url',
       url,
     );
-
     console.log(
       `[YouTube] yt-dlp client=${playerClient ?? 'default'} format=${format}`,
     );
@@ -1208,92 +1219,92 @@ export async function resolveYouTubeAudio(
      * Second: yt-dlp
      */
 
-   /*
- * =======================================================
- * STRATEGY 2
- * NORMAL YT-DLP
- * =======================================================
- */
+    /*
+  * =======================================================
+  * STRATEGY 2
+  * NORMAL YT-DLP
+  * =======================================================
+  */
 
-if (!resolved) {
-  const ytDlpAvailable = await checkYtDlp();
+    if (!resolved) {
+      const ytDlpAvailable = await checkYtDlp();
 
-  if (!ytDlpAvailable) {
-    throw new Error('yt-dlp is not available');
-  }
+      if (!ytDlpAvailable) {
+        throw new Error('yt-dlp is not available');
+      }
 
-  try {
-    console.log(
-      `[YouTube] Trying yt-dlp default client ${cleanId}`,
-    );
+      try {
+        console.log(
+          `[YouTube] Trying yt-dlp default client ${cleanId}`,
+        );
 
-    resolved = await resolveWithYtDlp(
-      cleanId,
-      quality,
-    );
+        resolved = await resolveWithYtDlp(
+          cleanId,
+          quality,
+        );
 
-    console.log(
-      `[YouTube] yt-dlp default SUCCESS ${cleanId}`,
-    );
-  } catch (error: any) {
-    console.warn(
-      `[YouTube] yt-dlp default failed ${cleanId}:`,
-      error?.message,
-    );
+        console.log(
+          `[YouTube] yt-dlp default SUCCESS ${cleanId}`,
+        );
+      } catch (error: any) {
+        console.warn(
+          `[YouTube] yt-dlp default failed ${cleanId}:`,
+          error?.message,
+        );
+
+        /*
+         * IMPORTANT:
+         *
+         * Do NOT throw here.
+         *
+         * Continue to Android fallback below.
+         */
+      }
+    }
+
 
     /*
-     * IMPORTANT:
-     *
-     * Do NOT throw here.
-     *
-     * Continue to Android fallback below.
+     * =======================================================
+     * STRATEGY 3
+     * ANDROID PLAYER CLIENT FALLBACK
+     * =======================================================
      */
-  }
-}
+
+    if (!resolved) {
+      try {
+        console.log(
+          `[YouTube] Retrying with Android player client ${cleanId}`,
+        );
+
+        resolved = await resolveWithYtDlp(
+          cleanId,
+          quality,
+          'android',
+        );
+
+        console.log(
+          `[YouTube] Android yt-dlp SUCCESS ${cleanId}`,
+        );
+      } catch (error: any) {
+        console.error(
+          `[YouTube] Android yt-dlp failed ${cleanId}:`,
+          error?.message,
+        );
+      }
+    }
 
 
-/*
- * =======================================================
- * STRATEGY 3
- * ANDROID PLAYER CLIENT FALLBACK
- * =======================================================
- */
+    /*
+     * =======================================================
+     * FINAL FAILURE
+     * =======================================================
+     */
 
-if (!resolved) {
-  try {
-    console.log(
-      `[YouTube] Retrying with Android player client ${cleanId}`,
-    );
-
-    resolved = await resolveWithYtDlp(
-      cleanId,
-      quality,
-      'android',
-    );
-
-    console.log(
-      `[YouTube] Android yt-dlp SUCCESS ${cleanId}`,
-    );
-  } catch (error: any) {
-    console.error(
-      `[YouTube] Android yt-dlp failed ${cleanId}:`,
-      error?.message,
-    );
-  }
-}
-
-
-/*
- * =======================================================
- * FINAL FAILURE
- * =======================================================
- */
-
-if (!resolved?.url) {
-  throw new Error(
-    `Unable to resolve a playable YouTube stream for ${cleanId}`,
-  );
-}
+    if (!resolved?.url) {
+      throw new Error(
+        `Unable to resolve a playable YouTube stream for ${cleanId}`,
+      );
+    }
     /*
      * -------------------------------------------------------
      * 5. Store fresh signed URL in Redis
