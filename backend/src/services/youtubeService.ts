@@ -987,6 +987,73 @@ async function resolveWithYtDlp(
       error?.message,
     );
 
+    // TEMPORARY DIAGNOSTIC
+    try {
+      console.log(
+        '[YouTube Diagnostic] Running format listing...',
+      );
+
+      const diagnosticArgs: string[] = [
+        '--js-runtimes',
+        'node',
+        '--no-playlist',
+        '--no-warnings',
+        '--skip-download',
+
+        // Reuse the SAME cookies
+        ...cookies.args,
+
+        '-F',
+        url,
+      ];
+
+      const diagnostic = await execFileAsync(
+        command,
+        diagnosticArgs,
+        {
+          timeout: 60000,
+          maxBuffer: 10 * 1024 * 1024,
+        },
+      );
+
+      console.log(
+        '[YouTube Diagnostic] FORMAT LIST:',
+      );
+
+      console.log(
+        String(diagnostic.stdout || ''),
+      );
+
+      if (diagnostic.stderr) {
+        console.log(
+          '[YouTube Diagnostic] STDERR:',
+        );
+
+        console.log(
+          String(diagnostic.stderr),
+        );
+      }
+    } catch (diagnosticError: any) {
+      console.error(
+        '[YouTube Diagnostic] Format listing failed:',
+        diagnosticError?.message,
+      );
+
+      if (diagnosticError?.stdout) {
+        console.log(
+          '[YouTube Diagnostic] STDOUT:',
+          String(diagnosticError.stdout),
+        );
+      }
+
+      if (diagnosticError?.stderr) {
+        console.log(
+          '[YouTube Diagnostic] STDERR:',
+          String(diagnosticError.stderr),
+        );
+      }
+    }
+
     throw error;
   } finally {
     await cookies.cleanup();
