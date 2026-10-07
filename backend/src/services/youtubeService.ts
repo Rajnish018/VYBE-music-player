@@ -94,6 +94,16 @@ type CachedYoutubeAudio = {
     | 'yt-dlp';
 };
 
+function getYtDlpCookiesArgs(): string[] {
+  const cookiesFile = process.env.YTDLP_COOKIES_FILE;
+
+  if (!cookiesFile) {
+    return [];
+  }
+
+  return ['--cookies', cookiesFile];
+}
+
 function getYoutubeStreamCacheKey(
   videoId: string,
   quality: 'low' | 'medium' | 'high',
@@ -892,20 +902,17 @@ async function resolveWithYtDlp(
   console.log(`[YouTube] Running yt-dlp: ${format}`);
 
   const args: string[] = [
-    '--js-runtimes',
-    'node',
+  '--js-runtimes', 'node',
+  '--no-playlist',
+  '--no-warnings',
+  '--skip-download',
 
-    '--no-playlist',
-    '--no-warnings',
-    '--skip-download',
+  ...getYtDlpCookiesArgs(),
 
-    '-f',
-    format,
-
-    '--get-url',
-
-    url,
-  ];
+  '-f', format,
+  '--get-url',
+  url,
+];
 
   try {
     const result = await execFileAsync(command, args, {
