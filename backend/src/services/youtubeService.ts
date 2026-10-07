@@ -911,7 +911,7 @@ async function checkYtDlp(): Promise<boolean> {
 
 async function resolveWithYtDlp(
   videoId: string,
-  quality: 'low' | 'high',
+  quality: 'low' | 'medium' | 'high',
   playerClient?: 'android'
 ): Promise<YoutubeAudioStream> {
   const url = `https://www.youtube.com/watch?v=${videoId}`;
@@ -975,6 +975,10 @@ async function resolveWithYtDlp(
       mimeType: mediaUrl.includes('.mp4')
         ? 'video/mp4'
         : 'audio/mp4',
+      bitrate: null,
+      contentLength: null,
+      itag: null,
+      codec: null,
     };
   } finally {
     await cookies.cleanup();
