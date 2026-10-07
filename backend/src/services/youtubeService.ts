@@ -911,150 +911,71 @@ async function checkYtDlp(): Promise<boolean> {
 
 async function resolveWithYtDlp(
   videoId: string,
-  quality: 'low' | 'medium' | 'high' = 'high',
+  quality: 'low' | 'high',
+  playerClient?: 'android'
 ): Promise<YoutubeAudioStream> {
-  const command = getYtDlpCommand();
-  const url = youtubeWatchUrl(videoId);
-
-  const format =
-    quality === 'low'
-      ? 'worstaudio/worst'
-      : 'bestaudio/best';
-
-  console.log('[YouTube] yt-dlp path:', command);
-  console.log(`[YouTube] Running yt-dlp: ${format}`);
+  const url = `https://www.youtube.com/watch?v=${videoId}`;
 
   const cookies = await prepareYtDlpCookies();
 
-  const args: string[] = [
-    '--js-runtimes', 'node',
-    '--no-playlist',
-    '--no-warnings',
-    '--skip-download',
-
-    ...cookies.args,
-
-    '-f', format,
-    '--get-url',
-    url,
-  ];
-
   try {
-    const result = await execFileAsync(command, args, {
-      timeout: 60000,
-      maxBuffer: 10 * 1024 * 1024,
-    });
+    const format =
+      quality === 'low'
+        ? 'worstaudio/worst'
+        : 'bestaudio/best';
 
-    const stdout = String(result.stdout || '').trim();
+    const args: string[] = [
+      '--js-runtimes',
+      'node',
+      '--no-playlist',
+      '--no-warnings',
+      '--skip-download',
+    ];
 
-    const streamUrl = stdout
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find(
-        (line) =>
-          line.startsWith('http://') ||
-          line.startsWith('https://'),
-      );
-
-    if (!streamUrl) {
-      throw new Error(
-        'yt-dlp did not return a stream URL',
+    if (playerClient) {
+      args.push(
+        '--extractor-args',
+        `youtube:player_client=${playerClient}`
       );
     }
 
-    const parsedUrl = new URL(streamUrl);
+    args.push(
+      ...cookies.args,
+      '-f',
+      format,
+      '--get-url',
+      url
+    );
 
-    let mimeType = 'audio/webm';
+    console.log(
+      `[YouTube] yt-dlp client=${playerClient ?? 'default'} format=${format}`
+    );
 
-    const mime = parsedUrl.searchParams.get('mime');
+    const { stdout } = await execFileAsync(
+      getYtDlpCommand(),
+      args,
+      {
+        timeout: 60_000,
+        maxBuffer: 10 * 1024 * 1024,
+      }
+    );
 
-    if (mime && mime.startsWith('audio/')) {
-      mimeType = mime;
+    const mediaUrl = stdout
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .find(line => /^https?:\/\//i.test(line));
+
+    if (!mediaUrl) {
+      throw new Error('yt-dlp returned no media URL');
     }
 
     return {
-      url: streamUrl,
-      mimeType,
-      bitrate: null,
-      contentLength: null,
-      itag: null,
-      codec: null,
+      url: mediaUrl,
       source: 'yt-dlp',
+      mimeType: mediaUrl.includes('.mp4')
+        ? 'video/mp4'
+        : 'audio/mp4',
     };
-  } catch (error: any) {
-    console.error(
-      '[YouTube] yt-dlp failed:',
-      error?.message,
-    );
-
-    // TEMPORARY DIAGNOSTIC
-    try {
-      console.log(
-        '[YouTube Diagnostic] Running format listing...',
-      );
-
-      const diagnosticArgs: string[] = [
-        '--js-runtimes',
-        'node',
-        '--no-playlist',
-        '--no-warnings',
-        '--skip-download',
-
-        // Reuse the SAME cookies
-        ...cookies.args,
-
-        '-F',
-        url,
-      ];
-
-      const diagnostic = await execFileAsync(
-        command,
-        diagnosticArgs,
-        {
-          timeout: 60000,
-          maxBuffer: 10 * 1024 * 1024,
-        },
-      );
-
-      console.log(
-        '[YouTube Diagnostic] FORMAT LIST:',
-      );
-
-      console.log(
-        String(diagnostic.stdout || ''),
-      );
-
-      if (diagnostic.stderr) {
-        console.log(
-          '[YouTube Diagnostic] STDERR:',
-        );
-
-        console.log(
-          String(diagnostic.stderr),
-        );
-      }
-    } catch (diagnosticError: any) {
-      console.error(
-        '[YouTube Diagnostic] Format listing failed:',
-        diagnosticError?.message,
-      );
-
-      if (diagnosticError?.stdout) {
-        console.log(
-          '[YouTube Diagnostic] STDOUT:',
-          String(diagnosticError.stdout),
-        );
-      }
-
-      if (diagnosticError?.stderr) {
-        console.log(
-          '[YouTube Diagnostic] STDERR:',
-          String(diagnosticError.stderr),
-        );
-      }
-    }
-
-    throw error;
   } finally {
     await cookies.cleanup();
   }
