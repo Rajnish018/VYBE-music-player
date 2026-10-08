@@ -2122,306 +2122,189 @@ async function resolveWithYtDlp(
 
 
 export async function resolveYouTubeAudio(
-
   videoId: string,
-
   quality:
-
     | 'low'
-
     | 'medium'
-
     | 'high' = 'high',
-
 ): Promise<YoutubeAudioStream> {
-
   const cleanId = extractYouTubeVideoId(videoId);
 
-
-
   if (!cleanId) {
-
     throw new Error('Invalid YouTube video ID');
-
   }
 
-
-
   /*
-
    * ---------------------------------------------------------
-
-   * 1. Fast Redis cache lookup
-
+   * 1. FAST REDIS CACHE LOOKUP
    * ---------------------------------------------------------
-
    */
-
-
 
   const cached = await getCachedYoutubeAudio(
-
     cleanId,
-
     quality,
-
   );
-
-
 
   if (cached?.url) {
+    console.log(
+      `[YouTube Cache] HIT ${cleanId} (${quality})`,
+    );
 
     return cached;
-
   }
 
-
-
-  /*
-
-   * ---------------------------------------------------------
-
-   * 2. Distributed resolution lock
-
-   *
-
-   * Only ONE backend instance/request is allowed to run
-
-   * youtubei.js / yt-dlp for this video + quality.
-
-   * ---------------------------------------------------------
-
-   */
-
-
-
-  const lockKey = getYoutubeResolutionLockKey(
-
-    cleanId,
-
-    quality,
-
+  console.log(
+    `[YouTube Cache] MISS ${cleanId} (${quality})`,
   );
 
+  /*
+   * ---------------------------------------------------------
+   * 2. DISTRIBUTED RESOLUTION LOCK
+   *
+   * Only ONE backend instance/request is allowed to run
+   * YouTube resolution for the same video + quality.
+   * ---------------------------------------------------------
+   */
 
+  const lockKey = getYoutubeResolutionLockKey(
+    cleanId,
+    quality,
+  );
 
   const startedAt = Date.now();
 
-
-
   let lockToken: string | null = null;
 
-
-
   while (
-
     Date.now() - startedAt <
-
     YOUTUBE_RESOLUTION_LOCK_MAX_WAIT_MS
-
   ) {
-
     lockToken = await acquireLock(
-
       lockKey,
-
       YOUTUBE_RESOLUTION_LOCK_TTL,
-
     );
 
-
-
     /*
-
      * We acquired the lock.
-
      */
 
     if (lockToken) {
-
       console.log(
-
         `[YouTube Lock] ACQUIRED ${cleanId} (${quality})`,
-
       );
-
-
 
       break;
-
     }
 
-
-
     /*
-
      * Another request is already resolving this video.
-
      *
-
-     * Wait for it to populate Redis instead of running
-
-     * yt-dlp ourselves.
-
+     * Wait instead of running another yt-dlp process.
      */
-
-
 
     console.log(
-
       `[YouTube Lock] WAIT ${cleanId} (${quality})`,
-
     );
-
-
 
     await sleep(
-
       YOUTUBE_RESOLUTION_LOCK_WAIT_MS,
-
     );
 
-
-
     /*
-
      * Check Redis again after waiting.
-
      */
-
-
 
     const resolvedByAnotherRequest =
-
       await getCachedYoutubeAudio(
-
         cleanId,
-
         quality,
-
       );
-
-
 
     if (resolvedByAnotherRequest?.url) {
-
       console.log(
-
         `[YouTube Lock] RESOLVED BY OTHER REQUEST ${cleanId} (${quality})`,
-
       );
-
-
 
       return resolvedByAnotherRequest;
-
     }
-
   }
-
-
 
   /*
-
    * ---------------------------------------------------------
-
-   * 3. Prevent an endless wait
-
+   * 3. PREVENT AN ENDLESS WAIT
    * ---------------------------------------------------------
-
    */
 
-
-
   if (!lockToken) {
-
     throw new Error(
-
       'YouTube stream resolution is already in progress. Please retry shortly.',
-
     );
-
   }
 
-
-
   try {
-
     /*
-
-     * IMPORTANT:
-
+     * -------------------------------------------------------
+     * 4. CHECK CACHE AGAIN AFTER ACQUIRING LOCK
      *
-
-     * The cache may have been populated between our first
-
-     * cache check and acquiring the lock.
-
-     *
-
-     * Always check Redis again after acquiring the lock.
-
+     * Another request may have populated Redis between
+     * our initial cache lookup and acquiring the lock.
+     * -------------------------------------------------------
      */
-
-
 
     const cachedAfterLock =
-
       await getCachedYoutubeAudio(
-
         cleanId,
-
         quality,
-
       );
-
-
 
     if (cachedAfterLock?.url) {
-
       console.log(
-
         `[YouTube Lock] CACHE FILLED BEFORE RESOLUTION ${cleanId} (${quality})`,
-
       );
 
-
-
       return cachedAfterLock;
-
     }
 
-
-
     /*
-
      * -------------------------------------------------------
-
-     * 4. Resolve fresh stream
-
+     * 5. RESOLVE FRESH YOUTUBE STREAM
      * -------------------------------------------------------
-
      */
-
-
 
     let resolved: YoutubeAudioStream | null = null;
 
+    /*
+     * Check whether a YouTube proxy is configured.
+     *
+     * Production:
+     *   YOUTUBE_PROXY configured
+     *
+     * Local:
+     *   YOUTUBE_PROXY not configured
+     */
 
+    const proxyConfigured =
+      Boolean(getYoutubeProxy());
 
     /*
-
-     * First: youtubei.js only when no media proxy is configured.
+     * -------------------------------------------------------
+     * STRATEGY 1
+     * YOUTUBEI.JS
      *
-     * With a proxy configured, youtubei.js can resolve a signed
-     * googlevideo URL using Render's direct network while that URL
-     * is later fetched through the proxy. The URL can be bound to a
-     * different egress IP and return 403.
+     * Only use youtubei.js when NO proxy is configured.
+     *
+     * When a proxy is configured, skip youtubei.js because
+     * the signed media URL can be generated using one egress
+     * and subsequently fetched using another egress.
+     * -------------------------------------------------------
      */
-    const proxyConfigured = Boolean(getYoutubeProxy());
 
     if (!proxyConfigured) {
       try {
+        console.log(
+          `[YouTube] Trying youtubei.js ${cleanId}`,
+        );
+
         const youtubeiStream =
           await tryYoutubeiStream(
             cleanId,
@@ -2430,281 +2313,167 @@ export async function resolveYouTubeAudio(
 
         if (youtubeiStream?.url) {
           resolved = youtubeiStream;
+
+          console.log(
+            `[YouTube] youtubei.js SUCCESS ${cleanId}`,
+          );
         }
       } catch (error: any) {
-        console.log(
-          '[YouTube] youtubei failed:',
+        console.warn(
+          `[YouTube] youtubei.js failed ${cleanId}:`,
           error?.message,
         );
       }
     } else {
       console.log(
-        '[YouTube] Proxy configured; skipping youtubei.js for media URL resolution',
+        `[YouTube] Proxy configured; skipping youtubei.js for media URL resolution`,
       );
     }
 
-
-
     /*
-
-     * Second: yt-dlp
-
+     * -------------------------------------------------------
+     * STRATEGY 2
+     * ANDROID + PROXY + NO COOKIES
+     *
+     * This is the PRIMARY production resolver when
+     * YOUTUBE_PROXY is configured.
+     *
+     * resolveWithYtDlp() already handles:
+     *
+     *   playerClient = android
+     *   proxy = configured
+     *   cookies = disabled
+     *   format = 18
+     *
+     * -------------------------------------------------------
      */
 
-
-
-    /*
-
-  * =======================================================
-
-  * STRATEGY 2
-
-  * NORMAL YT-DLP
-
-  * =======================================================
-
-  */
-
-
-
-    if (!resolved) {
-
-      const ytDlpAvailable = await checkYtDlp();
-
-
-
-      if (!ytDlpAvailable) {
-
-        throw new Error('yt-dlp is not available');
-
-      }
-
-
-
+    if (!resolved && proxyConfigured) {
       try {
-
         console.log(
-
-          `[YouTube] Trying yt-dlp default client ${cleanId}`,
-
+          `[YouTube] Trying Android + proxy + NO cookies ${cleanId}`,
         );
-
-
 
         resolved = await resolveWithYtDlp(
-
           cleanId,
-
           quality,
-
-        );
-
-
-
-        console.log(
-
-          `[YouTube] yt-dlp default SUCCESS ${cleanId}`,
-
-        );
-
-      } catch (error: any) {
-
-        console.warn(
-
-          `[YouTube] yt-dlp default failed ${cleanId}:`,
-
-          error?.message,
-
-        );
-
-
-
-        /*
-
-         * IMPORTANT:
-
-         *
-
-         * Do NOT throw here.
-
-         *
-
-         * Continue to Android fallback below.
-
-         */
-
-      }
-
-    }
-
-
-
-
-
-    /*
-
-     * =======================================================
-
-     * STRATEGY 3
-
-     * ANDROID PLAYER CLIENT FALLBACK
-
-     * =======================================================
-
-     */
-
-
-
-    if (!resolved) {
-
-      try {
-
-        console.log(
-
-          `[YouTube] Retrying with Android player client ${cleanId}`,
-
-        );
-
-
-
-        resolved = await resolveWithYtDlp(
-
-          cleanId,
-
-          quality,
-
           'android',
-
         );
-
-
 
         console.log(
-
-          `[YouTube] Android yt-dlp SUCCESS ${cleanId}`,
-
+          `[YouTube] Android + proxy SUCCESS ${cleanId}`,
         );
-
       } catch (error: any) {
-
-        console.error(
-
-          `[YouTube] Android yt-dlp failed ${cleanId}:`,
-
+        console.warn(
+          `[YouTube] Android + proxy failed ${cleanId}:`,
           error?.message,
-
         );
-
       }
-
     }
 
-
-
-
-
     /*
-
-     * =======================================================
-
-     * FINAL FAILURE
-
-     * =======================================================
-
+     * -------------------------------------------------------
+     * STRATEGY 3
+     * DEFAULT YT-DLP
+     *
+     * Only use the normal/default yt-dlp resolver when
+     * NO proxy is configured.
+     *
+     * This prevents production from doing:
+     *
+     *   browser cookies + proxy IP
+     *
+     * which can cause YouTube session/bot checks.
+     * -------------------------------------------------------
      */
 
+    if (!resolved && !proxyConfigured) {
+      try {
+        const ytDlpAvailable =
+          await checkYtDlp();
 
+        if (!ytDlpAvailable) {
+          throw new Error(
+            'yt-dlp is not available',
+          );
+        }
+
+        console.log(
+          `[YouTube] Trying yt-dlp default client ${cleanId}`,
+        );
+
+        resolved = await resolveWithYtDlp(
+          cleanId,
+          quality,
+        );
+
+        console.log(
+          `[YouTube] yt-dlp default SUCCESS ${cleanId}`,
+        );
+      } catch (error: any) {
+        console.warn(
+          `[YouTube] yt-dlp default failed ${cleanId}:`,
+          error?.message,
+        );
+      }
+    }
+
+    /*
+     * -------------------------------------------------------
+     * 6. FINAL RESOLUTION FAILURE
+     * -------------------------------------------------------
+     */
 
     if (!resolved?.url) {
-
       throw new Error(
-
         `Unable to resolve a playable YouTube stream for ${cleanId}`,
-
       );
-
     }
 
     /*
-
      * -------------------------------------------------------
-
-     * 5. Store fresh signed URL in Redis
-
+     * 7. STORE FRESH SIGNED URL IN REDIS
      * -------------------------------------------------------
-
      */
-
-
 
     await cacheYoutubeAudio(
-
       cleanId,
-
       quality,
-
       resolved,
-
     );
 
-
+    console.log(
+      `[YouTube Cache] STORED ${cleanId} (${quality})`,
+    );
 
     return resolved;
-
   } finally {
-
     /*
-
      * -------------------------------------------------------
-
-     * 6. Release lock safely
-
+     * 8. RELEASE DISTRIBUTED LOCK
      *
-
-     * releaseLock verifies the token, so one request cannot
-
-     * accidentally release another request's lock.
-
+     * releaseLock() verifies the lock token, preventing
+     * one request from releasing another request's lock.
      * -------------------------------------------------------
-
      */
 
-
-
     try {
-
       await releaseLock(
-
         lockKey,
-
         lockToken,
-
       );
-
-
 
       console.log(
-
         `[YouTube Lock] RELEASED ${cleanId} (${quality})`,
-
       );
-
     } catch (error: any) {
-
       console.error(
-
         `[YouTube Lock] RELEASE FAILED ${cleanId} (${quality}):`,
-
         error?.message,
-
       );
-
     }
-
   }
-
 }
-
 
 
 /* =========================================================
